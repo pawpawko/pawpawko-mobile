@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 
 import { DiceLoader } from '@/components/dice-loader';
+import { FlairPill } from '@/components/flair-pill';
 
 import {
   BINDER_CATEGORIES,
@@ -54,6 +55,13 @@ const LAST_GAME_KEY = 'pawpaw:lastGame';
 
 export default function TradesScreen() {
   const router = useRouter();
+  const listRef = useRef<FlatList<BinderRow>>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
+    }, []),
+  );
 
   const [category, setCategory] = useState<BinderCategory>('optcg');
   const [cardsInput, setCardsInput] = useState('');
@@ -113,8 +121,12 @@ export default function TradesScreen() {
   }, [boroughs, subways, shop, city, category, parseCards]);
 
   useEffect(() => {
+    // Clear the prior game's results so the DiceLoader shows during the
+    // refetch instead of the RefreshControl spinner over stale rows.
+    setRows([]);
     load();
-  }, [category]); // reload list when game tab changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category]);
 
   function clearFilters() {
     setCardsInput('');
@@ -227,6 +239,7 @@ export default function TradesScreen() {
         </View>
       ) : (
         <FlatList
+          ref={listRef}
           data={rows}
           keyExtractor={(r) => r.binder_id}
           refreshControl={
@@ -252,6 +265,10 @@ export default function TradesScreen() {
                     <Text style={styles.matchBadgeText}>{item.matched_card_count}</Text>
                   </View>
                 ) : null}
+              </View>
+              <View style={styles.rowPills}>
+                <FlairPill value={item.category} kind="category" size="sm" />
+                <FlairPill value={item.flair} kind="flair" size="sm" />
               </View>
             </Pressable>
           )}
@@ -333,6 +350,7 @@ const styles = StyleSheet.create({
   rowTitle: { flex: 1 },
   rowOwner: { fontSize: 14, color: colors.textSecondary, fontFamily: fonts.body },
   rowBinderName: { fontSize: 16, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
+  rowPills: { flexDirection: 'row', gap: 6, marginTop: 6 },
   rowDesc: { fontSize: 13, color: colors.textSecondary, marginTop: 6, fontFamily: fonts.body },
   matchBadge: {
     backgroundColor: colors.accent,

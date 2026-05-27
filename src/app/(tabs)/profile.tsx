@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -38,6 +39,15 @@ type NameCheck = { status: 'idle' | 'checking' | 'ok' | 'bad'; message: string }
 export default function ProfileScreen() {
   const { session } = useAuth();
   const userId = session?.user.id;
+  const scrollRef = useRef<ScrollView>(null);
+
+  // Scroll back to the top whenever the tab regains focus so the user
+  // never sees the previous scroll position when re-entering Profile.
+  useFocusEffect(
+    useCallback(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+    }, []),
+  );
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -208,7 +218,7 @@ export default function ProfileScreen() {
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.welcome}>Welcome back{originalName ? `, ${originalName}` : ''}</Text>
         <Text style={styles.email}>{session?.user.email}</Text>
 

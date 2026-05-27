@@ -40,11 +40,13 @@ export default function SignInScreen() {
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.container}>
-          <Image
-            source={require('../../assets/images/jolly.png')}
-            style={styles.logo}
-            contentFit="contain"
-          />
+          <View style={styles.logoBadge}>
+            <Image
+              source={require('../../assets/images/jolly.png')}
+              style={styles.logo}
+              contentFit="contain"
+            />
+          </View>
           <Text style={styles.title}>PAWPAW KO</Text>
           <Text style={styles.subtitle}>{mode === 'signin' ? 'Sign in' : 'Create account'}</Text>
 
@@ -93,7 +95,17 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bgPrimary },
   flex: { flex: 1 },
   container: { flex: 1, justifyContent: 'center', padding: 24, gap: 14 },
-  logo: { width: 120, height: 120, alignSelf: 'center', marginBottom: 8 },
+  logoBadge: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.accentLight,
+    marginBottom: 8,
+  },
+  logo: { width: 120, height: 120 },
   title: {
     fontSize: 36,
     fontFamily: fonts.serifBold,

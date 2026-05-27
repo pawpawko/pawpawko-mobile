@@ -7,11 +7,21 @@ import { colors, fonts } from '@/lib/theme';
 
 const HeaderLogo = () => (
   <View style={{ paddingLeft: 12 }}>
-    <Image
-      source={require('../../../assets/images/jolly.png')}
-      style={{ width: 28, height: 28 }}
-      contentFit="contain"
-    />
+    <View
+      style={{
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: colors.accentLight,
+      }}>
+      <Image
+        source={require('../../../assets/images/jolly.png')}
+        style={{ width: 36, height: 36 }}
+        contentFit="contain"
+      />
+    </View>
   </View>
 );
 
@@ -38,10 +48,10 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, size }) => <Ionicons name="search" size={size} color={color} />,
           headerRight: () => (
             <Pressable
-              onPress={() => router.push('/scan-qr')}
+              onPress={() => router.push('/scan')}
               style={({ pressed }) => ({ padding: 10, opacity: pressed ? 0.6 : 1 })}
-              accessibilityLabel="Scan QR code">
-              <Ionicons name="qr-code-outline" size={22} color={colors.accent} />
+              accessibilityLabel="Open camera scanner">
+              <Ionicons name="camera-outline" size={24} color={colors.accent} />
             </Pressable>
           ),
         }}

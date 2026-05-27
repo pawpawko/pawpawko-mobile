@@ -49,7 +49,7 @@ function AuthGate() {
           headerTitleStyle: { fontFamily: 'Cinzel_500Medium' },
         }}
       />
-      <Stack.Screen name="scan-qr" options={{ presentation: 'modal', animation: 'fade' }} />
+      <Stack.Screen name="scan" options={{ presentation: 'modal', animation: 'fade' }} />
     </Stack>
   );
 }
