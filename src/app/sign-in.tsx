@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { signInWithGoogle } from '@/lib/google-auth';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
@@ -11,6 +12,21 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
+
+  async function googleSubmit() {
+    setGoogleBusy(true);
+    try {
+      const result = await signInWithGoogle();
+      if (result === 'play-services-unavailable') {
+        Alert.alert('Google Play Services unavailable', 'Update Google Play Services and try again.');
+      }
+    } catch (e: any) {
+      Alert.alert('Google sign-in failed', e?.message ?? String(e));
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
 
   async function submit() {
     setBusy(true);
@@ -85,6 +101,23 @@ export default function SignInScreen() {
               {mode === 'signin' ? 'No account? Sign up' : 'Already have an account? Sign in'}
             </Text>
           </Pressable>
+
+          <View style={styles.dividerRow}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>OR</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [styles.googleButton, pressed && styles.googleButtonPressed]}
+            onPress={googleSubmit}
+            disabled={googleBusy || busy}>
+            {googleBusy ? (
+              <ActivityIndicator color={colors.textPrimary} />
+            ) : (
+              <Text style={styles.googleButtonText}>Continue with Google</Text>
+            )}
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -152,5 +185,38 @@ const styles = StyleSheet.create({
     color: colors.accent,
     marginTop: 16,
     fontFamily: fonts.body,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  dividerText: {
+    color: colors.textMuted,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    letterSpacing: 2,
+  },
+  googleButton: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgCard,
+    padding: 14,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+  },
+  googleButtonPressed: { backgroundColor: colors.accentLight },
+  googleButtonText: {
+    color: colors.textPrimary,
+    fontFamily: fonts.serifBold,
+    fontSize: 14,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
   },
 });
