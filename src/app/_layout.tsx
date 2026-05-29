@@ -37,7 +37,10 @@ function AuthGate() {
     }
   }, [session, loading, needsSetup, segments]);
 
-  if (loading) {
+  // Hold on the loader until the profile-setup status has resolved too,
+  // otherwise a signed-in user briefly lands on /trades before AuthGate
+  // can bounce them to /profile when needsSetup turns true.
+  if (loading || (session && needsSetup === null)) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary }}>
         <DiceLoader />
