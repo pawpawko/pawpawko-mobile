@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 
+import { DiceLoader } from '@/components/dice-loader';
 import { useAuth } from '@/lib/auth';
 import { BOROUGHS_BY_CITY, CITIES } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
@@ -37,9 +38,35 @@ const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 type NameCheck = { status: 'idle' | 'checking' | 'ok' | 'bad'; message: string };
 
 export default function ProfileScreen() {
-  const { session } = useAuth();
+  const { session, refreshSetup } = useAuth();
   const userId = session?.user.id;
+  const router = useRouter();
   const scrollRef = useRef<ScrollView>(null);
+
+  // Dev-only tester for Trade Matches. Picks the first non-self user with a
+  // trade binder and routes to /trade-matches/<their-uuid>. Will be removed
+  // once BLE / QR pairing is wired up.
+  async function openTradeMatchesTest() {
+    if (!userId) return;
+    const { data, error } = await supabase
+      .from('binders')
+      .select('user_id')
+      .eq('flair', 'trade')
+      .neq('user_id', userId)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) {
+      Alert.alert(
+        'No partner found',
+        'No other user with a trade binder exists yet. Create a second account to test, or sign in twice on two devices.',
+      );
+      return;
+    }
+    router.push({
+      pathname: '/trade-matches/[partnerId]',
+      params: { partnerId: data.user_id },
+    });
+  }
 
   // Scroll back to the top whenever the tab regains focus so the user
   // never sees the previous scroll position when re-entering Profile.
@@ -193,6 +220,7 @@ export default function ProfileScreen() {
       } else {
         Alert.alert('Saved');
         setSetupRequired(false);
+        refreshSetup();
         if (nameChanged) {
           setOriginalName(name);
           setNameLockedUntil(new Date(Date.now() + NINETY_DAYS_MS));
@@ -206,7 +234,7 @@ export default function ProfileScreen() {
   if (loading) {
     return (
       <View style={styles.loadingWrap}>
-        <ActivityIndicator color={colors.accent} />
+        <DiceLoader />
       </View>
     );
   }
@@ -332,6 +360,20 @@ export default function ProfileScreen() {
         </Pressable>
 
         <View style={styles.divider} />
+
+        <Pressable
+          style={({ pressed }) => [styles.tradeTapBtn, pressed && styles.tradeTapBtnPressed]}
+          onPress={() => router.push('/trade-tap')}>
+          <Ionicons name="link" size={18} color={colors.bgPrimary} />
+          <Text style={styles.tradeTapBtnText}>TRADE TAP</Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.devBtn, pressed && { opacity: 0.7 }]}
+          onPress={openTradeMatchesTest}>
+          <Ionicons name="construct-outline" size={14} color={colors.accent} />
+          <Text style={styles.devBtnText}>DEV · OPEN TRADE MATCHES</Text>
+        </Pressable>
 
         <Pressable
           style={({ pressed }) => [styles.signOut, pressed && styles.signOutPressed]}
@@ -489,6 +531,40 @@ const styles = StyleSheet.create({
   saveBtnDisabled: { opacity: 0.5 },
   saveBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
 
+  tradeTapBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent,
+  },
+  tradeTapBtnPressed: { backgroundColor: colors.accentLight },
+  tradeTapBtnText: {
+    color: colors.bgPrimary,
+    fontFamily: fonts.serifBold,
+    fontSize: 14,
+    letterSpacing: 3,
+  },
+  devBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginTop: 8,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.borderAccent,
+    borderStyle: 'dashed',
+  },
+  devBtnText: {
+    color: colors.accent,
+    fontFamily: fonts.serifBold,
+    fontSize: 11,
+    letterSpacing: 2,
+  },
   signOut: {
     marginTop: 4,
     padding: 14,

@@ -3,30 +3,44 @@ import { Lora_400Regular, Lora_400Regular_Italic, Lora_700Bold, useFonts as useL
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 
+import { DiceLoader } from '@/components/dice-loader';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { AutoSearchProvider } from '@/lib/auto-search-context';
 import { colors } from '@/lib/theme';
 
 function AuthGate() {
-  const { session, loading } = useAuth();
+  const { session, loading, needsSetup } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
     const inAuthGroup = segments[0] === 'sign-in';
+    // segments is ['(tabs)', 'profile'] when the profile tab is focused.
+    const onProfileTab = segments[0] === '(tabs)' && segments[1] === 'profile';
+
     if (!session && !inAuthGroup) {
       router.replace('/sign-in');
-    } else if (session && inAuthGroup) {
-      router.replace('/trades');
+      return;
     }
-  }, [session, loading, segments]);
+    if (session && inAuthGroup) {
+      router.replace('/trades');
+      return;
+    }
+    // Profile setup gate: a signed-in user without display_name_set must
+    // land on the profile tab (which already shows the setup banner) until
+    // they save a real display name. Mirrors the web enforceProfileSetup.
+    if (session && needsSetup === true && !onProfileTab) {
+      router.replace('/profile');
+    }
+  }, [session, loading, needsSetup, segments]);
 
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary }}>
-        <ActivityIndicator color={colors.accent} />
+        <DiceLoader />
       </View>
     );
   }
@@ -50,6 +64,39 @@ function AuthGate() {
         }}
       />
       <Stack.Screen name="scan" options={{ presentation: 'modal', animation: 'fade' }} />
+      <Stack.Screen
+        name="nearby"
+        options={{
+          presentation: 'modal',
+          headerShown: true,
+          title: 'NEARBY',
+          headerStyle: { backgroundColor: colors.bgSecondary },
+          headerTintColor: colors.textPrimary,
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 },
+        }}
+      />
+      <Stack.Screen
+        name="trade-matches/[partnerId]"
+        options={{
+          presentation: 'modal',
+          headerShown: true,
+          title: 'TRADE MATCHES',
+          headerStyle: { backgroundColor: colors.bgSecondary },
+          headerTintColor: colors.textPrimary,
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 },
+        }}
+      />
+      <Stack.Screen
+        name="trade-tap"
+        options={{
+          presentation: 'modal',
+          headerShown: true,
+          title: 'TRADE TAP',
+          headerStyle: { backgroundColor: colors.bgSecondary },
+          headerTintColor: colors.textPrimary,
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 },
+        }}
+      />
     </Stack>
   );
 }
@@ -61,15 +108,17 @@ export default function RootLayout() {
   if (!cinzelLoaded || !loraLoaded) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary }}>
-        <ActivityIndicator color={colors.accent} />
+        <DiceLoader />
       </View>
     );
   }
 
   return (
     <AuthProvider>
-      <StatusBar style="light" />
-      <AuthGate />
+      <AutoSearchProvider>
+        <StatusBar style="light" />
+        <AuthGate />
+      </AutoSearchProvider>
     </AuthProvider>
   );
 }
