@@ -124,6 +124,9 @@ export default function BinderDetailScreen() {
   // Tracks whether the Add-Cards pager session actually added anything, so we
   // can jump the binder to the page the new (end-sorted) cards land on.
   const addedDuringSessionRef = useRef(false);
+  // Bumped after an add session closes; a dedicated effect then jumps to the
+  // last page using the freshly-settled listings (so it can't undershoot).
+  const [jumpToEndNonce, setJumpToEndNonce] = useState(0);
 
   // Existing
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
@@ -166,7 +169,10 @@ export default function BinderDetailScreen() {
             .select('id, quantity, listing_type, card_code, sort_order')
             .eq('binder_id', id)
             .order('sort_order', { ascending: true, nullsFirst: false })
-            .order('created_at', { ascending: false })
+            // Oldest-first among unplaced (null sort_order) cards so freshly
+            // added cards land at the END of the binder — keeping them on the
+            // last page, which is where the add flow navigates to.
+            .order('created_at', { ascending: true })
         : supabase.rpc('get_binder_listings_public', { p_binder_id: id }),
     ]);
     if (hRes.error) console.warn('header', hRes.error.message);
@@ -207,6 +213,15 @@ export default function BinderDetailScreen() {
     const totalPages = Math.max(1, Math.ceil(sortedListings.length / pageSize));
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [sortedListings.length, pageSize, currentPage]);
+
+  // After an add session, jump to the last page — where new (end-sorted) cards
+  // land — computed from the live, settled sortedListings so it always hits the
+  // true last page instead of undershooting on a stale count.
+  useEffect(() => {
+    if (jumpToEndNonce === 0) return;
+    setCurrentPage(Math.max(1, Math.ceil(sortedListings.length / pageSize)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpToEndNonce]);
 
   // ---- Header refresh (used after rename) ----
   async function refreshHeader() {
@@ -544,16 +559,15 @@ export default function BinderDetailScreen() {
         binderId={id ?? null}
         onClose={async () => {
           setAddCards(null);
+          const added = addedDuringSessionRef.current;
+          addedDuringSessionRef.current = false;
           // Re-sync from the DB so the grid reflects everything added/removed
           // during this pager session (silent = no full-screen loader flash).
-          const lst = await loadAll({ silent: true });
+          await loadAll({ silent: true });
           // New cards sort to the end (no saved position) → the last page. If
-          // this session added any, jump there so the additions are visible
-          // instead of stranded on a page the user isn't looking at.
-          if (addedDuringSessionRef.current && lst) {
-            setCurrentPage(Math.max(1, Math.ceil(lst.length / pageSize)));
-          }
-          addedDuringSessionRef.current = false;
+          // this session added any, bump the nonce so the jump effect lands on
+          // the last page once the reloaded listings have settled.
+          if (added) setJumpToEndNonce((n) => n + 1);
         }}
         onSave={async (card, qty, type) => {
           // Don't close on save — keep the pager open so the user can
