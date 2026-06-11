@@ -636,14 +636,11 @@ function applySortMode(
   const out = listings.slice();
   if (mode === 'custom-3x3' || mode === 'custom-4x3') {
     // Nulls (new listings without a position) sort to the end, matching the
-    // web app's `order(sort_order, nullsFirst: false)`. Two nulls would make
-    // `Infinity - Infinity = NaN` (an unstable comparator that can drop/garble
-    // freshly-added cards), so fall back to card_code to keep the order stable.
-    return out.sort(
-      (a, b) =>
-        (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
+    // web app's `order(sort_order, nullsFirst: false)`. Among nulls the input
+    // order is preserved (stable sort) so freshly-added cards stay together at
+    // the end in insertion order — NOT regrouped by card_code, which for One
+    // Piece's color-grouped numbering would look like an unwanted color sort.
+    return out.sort((a, b) => (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity));
   }
   if (mode === 'release') {
     return out.sort(
