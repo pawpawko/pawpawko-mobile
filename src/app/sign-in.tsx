@@ -273,6 +273,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   oauthPressed: { opacity: 0.7 },
-  oauthGoogle: { backgroundColor: colors.accentLight },
+  oauthGoogle: { backgroundColor: '#fff' },
   oauthDiscord: { backgroundColor: '#5865F2', borderColor: '#5865F2' },
 });

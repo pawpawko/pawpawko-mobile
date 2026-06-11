@@ -3,7 +3,7 @@ import { Lora_400Regular, Lora_400Regular_Italic, Lora_700Bold, useFonts as useL
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { View } from 'react-native';
+import { View, type TextStyle } from 'react-native';
 
 import { DiceLoader } from '@/components/dice-loader';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -75,7 +75,7 @@ function AuthGate() {
           title: 'NEARBY',
           headerStyle: { backgroundColor: colors.bgSecondary },
           headerTintColor: colors.textPrimary,
-          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 },
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 } as TextStyle,
         }}
       />
       <Stack.Screen
@@ -86,7 +86,7 @@ function AuthGate() {
           title: 'TRADE MATCHES',
           headerStyle: { backgroundColor: colors.bgSecondary },
           headerTintColor: colors.textPrimary,
-          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 },
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 } as TextStyle,
         }}
       />
       <Stack.Screen
@@ -97,7 +97,7 @@ function AuthGate() {
           title: 'TRADE TAP',
           headerStyle: { backgroundColor: colors.bgSecondary },
           headerTintColor: colors.textPrimary,
-          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 },
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 } as TextStyle,
         }}
       />
     </Stack>

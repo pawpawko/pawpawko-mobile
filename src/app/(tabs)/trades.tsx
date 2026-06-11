@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -73,6 +74,7 @@ export default function TradesScreen() {
 
   const [rows, setRows] = useState<BinderRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Restore last-game choice
   useEffect(() => {
@@ -101,24 +103,29 @@ export default function TradesScreen() {
     return raw.map((c) => (category === 'pokemon' ? c.toLowerCase() : c.toUpperCase()));
   }, [cardsInput, category]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await supabase.rpc('search_binders', {
-      p_boroughs: boroughs.length ? boroughs : null,
-      p_subways: subways.length ? subways : null,
-      p_shop: shop.trim() || null,
-      p_category: category,
-      p_city: city || null,
-      p_card_codes: parseCards(),
-    });
-    setLoading(false);
-    if (error) {
-      console.warn('search_binders error', error.message);
-      setRows([]);
-      return;
-    }
-    setRows((data ?? []) as BinderRow[]);
-  }, [boroughs, subways, shop, city, category, parseCards]);
+  const load = useCallback(
+    async (mode: 'initial' | 'pull' = 'initial') => {
+      if (mode === 'initial') setLoading(true);
+      if (mode === 'pull') setRefreshing(true);
+      const { data, error } = await supabase.rpc('search_binders', {
+        p_boroughs: boroughs.length ? boroughs : null,
+        p_subways: subways.length ? subways : null,
+        p_shop: shop.trim() || null,
+        p_category: category,
+        p_city: city || null,
+        p_card_codes: parseCards(),
+      });
+      if (mode === 'initial') setLoading(false);
+      if (mode === 'pull') setRefreshing(false);
+      if (error) {
+        console.warn('search_binders error', error.message);
+        setRows([]);
+        return;
+      }
+      setRows((data ?? []) as BinderRow[]);
+    },
+    [boroughs, subways, shop, city, category, parseCards],
+  );
 
   useEffect(() => {
     // Clear the prior game's results so the DiceLoader shows during the
@@ -162,7 +169,14 @@ export default function TradesScreen() {
       </View>
 
       {/* Filters toggle bar */}
-      <Pressable style={styles.filterToggle} onPress={() => setFiltersOpen((o) => !o)}>
+      <Pressable
+        style={styles.filterToggle}
+        onPress={() => {
+          // Closing the panel applies the current filter set — saves the user
+          // an extra tap on APPLY.
+          if (filtersOpen) load();
+          setFiltersOpen((o) => !o);
+        }}>
         <Ionicons name="options-outline" size={16} color={colors.accent} />
         <Text style={styles.filterToggleText}>{filtersOpen ? 'Hide filters' : 'Filters'}</Text>
         <Ionicons name={filtersOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.accent} />
@@ -202,12 +216,14 @@ export default function TradesScreen() {
 
           {city === 'nyc' ? (
             <>
-              <Text style={styles.label}>SUBWAY STOP</Text>
-              <View style={styles.chipRow}>
-                {NYC_SUBWAY_STOPS.map((s) => (
-                  <Chip key={s} label={s} active={subways.includes(s)} onPress={() => toggleSubway(s)} />
-                ))}
-              </View>
+              <Text style={styles.label}>SUBWAY STOPS</Text>
+              <MultiSelectField
+                label="Subway stops"
+                options={NYC_SUBWAY_STOPS}
+                selected={subways}
+                onChange={setSubways}
+                emptyLabel="Any"
+              />
             </>
           ) : null}
 
@@ -232,10 +248,10 @@ export default function TradesScreen() {
       ) : null}
 
       {/* Results */}
+      <View style={styles.resultsWrap}>
       {loading && rows.length === 0 ? (
         <View style={styles.loaderWrap}>
           <DiceLoader />
-          <Text style={styles.loaderText}>Rolling…</Text>
         </View>
       ) : (
         <FlatList
@@ -243,7 +259,11 @@ export default function TradesScreen() {
           data={rows}
           keyExtractor={(r) => r.binder_id}
           refreshControl={
-            <RefreshControl refreshing={loading} onRefresh={load} tintColor={colors.accent} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => load('pull')}
+              tintColor={colors.accent}
+            />
           }
           ListHeaderComponent={
             <Text style={styles.resultsCount}>
@@ -262,18 +282,29 @@ export default function TradesScreen() {
                 </Text>
                 {item.matched_card_count ? (
                   <View style={styles.matchBadge}>
-                    <Text style={styles.matchBadgeText}>{item.matched_card_count}</Text>
+                    <Text style={styles.matchBadgeText}>
+                      {item.matched_card_count} {item.matched_card_count === 1 ? 'MATCH' : 'MATCHES'}
+                    </Text>
                   </View>
                 ) : null}
               </View>
               <View style={styles.rowPills}>
-                <FlairPill value={item.category} kind="category" size="sm" />
                 <FlairPill value={item.flair} kind="flair" size="sm" />
               </View>
             </Pressable>
           )}
         />
       )}
+      {filtersOpen ? (
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={() => {
+            load();
+            setFiltersOpen(false);
+          }}
+        />
+      ) : null}
+      </View>
     </View>
   );
 }
@@ -285,6 +316,107 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
       style={({ pressed }) => [styles.chip, active && styles.chipActive, pressed && styles.chipPressed]}>
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
     </Pressable>
+  );
+}
+
+function MultiSelectField({
+  label,
+  options,
+  selected,
+  onChange,
+  emptyLabel = 'Any',
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  emptyLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const summary =
+    selected.length === 0
+      ? emptyLabel
+      : selected.length === 1
+        ? selected[0]
+        : `${selected.length} selected`;
+
+  function toggle(value: string) {
+    if (selected.includes(value)) {
+      onChange(selected.filter((s) => s !== value));
+    } else {
+      onChange([...selected, value]);
+    }
+  }
+
+  return (
+    <>
+      <Pressable
+        onPress={() => setOpen(true)}
+        style={({ pressed }) => [styles.dropdown, pressed && { opacity: 0.7 }]}>
+        <Text
+          style={[
+            styles.dropdownValue,
+            selected.length === 0 && styles.dropdownValueEmpty,
+          ]}
+          numberOfLines={1}>
+          {summary}
+        </Text>
+        <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setOpen(false)}>
+          <Pressable style={styles.sheetCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>{label.toUpperCase()}</Text>
+              <Pressable onPress={() => setOpen(false)}>
+                <Ionicons name="close" size={24} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+            <FlatList
+              data={options}
+              keyExtractor={(v, i) => `${i}-${v}`}
+              renderItem={({ item }) => {
+                const active = selected.includes(item);
+                return (
+                  <Pressable
+                    onPress={() => toggle(item)}
+                    style={({ pressed }) => [
+                      styles.sheetRow,
+                      active && styles.sheetRowActive,
+                      pressed && { opacity: 0.7 },
+                    ]}>
+                    <Text style={[styles.sheetRowText, active && styles.sheetRowTextActive]}>
+                      {item}
+                    </Text>
+                    {active ? (
+                      <Ionicons name="checkmark" size={18} color={colors.accent} />
+                    ) : null}
+                  </Pressable>
+                );
+              }}
+            />
+            <View style={styles.sheetFooter}>
+              {selected.length > 0 ? (
+                <Pressable
+                  onPress={() => onChange([])}
+                  style={({ pressed }) => [styles.sheetFooterBtn, pressed && { opacity: 0.7 }]}>
+                  <Text style={styles.sheetFooterBtnText}>CLEAR ALL</Text>
+                </Pressable>
+              ) : (
+                <View style={{ flex: 1 }} />
+              )}
+              <Pressable
+                onPress={() => setOpen(false)}
+                style={({ pressed }) => [styles.sheetDoneBtn, pressed && { opacity: 0.7 }]}>
+                <Text style={styles.sheetDoneBtnText}>DONE</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
   );
 }
 
@@ -322,6 +454,103 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+
+  dropdown: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgCard,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  dropdownValue: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontFamily: fonts.body,
+    fontSize: 14,
+  },
+  dropdownValueEmpty: { color: colors.textMuted },
+
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  sheetCard: {
+    backgroundColor: colors.bgSecondary,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderAccent,
+    paddingVertical: 12,
+    maxHeight: '75%',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  sheetTitle: {
+    color: colors.accent,
+    fontFamily: fonts.serifBold,
+    letterSpacing: 3,
+    fontSize: 14,
+  },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  sheetRowActive: { backgroundColor: colors.bgCardHover },
+  sheetRowText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15 },
+  sheetRowTextActive: { color: colors.accent, fontFamily: fonts.serifBold },
+  sheetFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  sheetFooterBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.borderAccent,
+  },
+  sheetFooterBtnText: {
+    color: colors.accent,
+    fontFamily: fonts.serifBold,
+    letterSpacing: 2,
+    fontSize: 12,
+  },
+  sheetDoneBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+  },
+  sheetDoneBtnText: {
+    color: colors.bgPrimary,
+    fontFamily: fonts.serifBold,
+    letterSpacing: 2,
+    fontSize: 13,
+  },
   chip: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -343,6 +572,7 @@ const styles = StyleSheet.create({
   clearBtnPressed: { backgroundColor: colors.bgCard },
   clearBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
 
+  resultsWrap: { flex: 1 },
   resultsCount: { padding: 12, color: colors.textMuted, fontFamily: fonts.body, fontSize: 13 },
   row: { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderColor: colors.border },
   rowPressed: { backgroundColor: colors.bgSecondary },
@@ -354,12 +584,17 @@ const styles = StyleSheet.create({
   rowDesc: { fontSize: 13, color: colors.textSecondary, marginTop: 6, fontFamily: fonts.body },
   matchBadge: {
     backgroundColor: colors.accent,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 999,
     marginLeft: 8,
   },
-  matchBadgeText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 11 },
+  matchBadgeText: {
+    color: colors.bgPrimary,
+    fontFamily: fonts.serifBold,
+    fontSize: 11,
+    letterSpacing: 1.5,
+  },
   empty: { textAlign: 'center', marginTop: 48, color: colors.textMuted, fontFamily: fonts.body },
   loaderWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 48, gap: 8 },
   loaderText: { color: colors.textMuted, fontFamily: fonts.serif, letterSpacing: 3, fontSize: 12 },

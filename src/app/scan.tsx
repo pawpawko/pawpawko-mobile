@@ -11,18 +11,27 @@ import { colors, fonts, radius } from '@/lib/theme';
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const SLUG_RE = /\/binders\/([a-z0-9-]+)/i;
+const TRADE_TAP_RE = /pawpawko:\/\/trade-tap\?u=([0-9a-f-]{36})/i;
 
-async function resolveScanned(raw: string): Promise<string | null> {
-  // 1. Full UUID embedded anywhere → use it directly.
+type ScanResult =
+  | { kind: 'binder'; binderId: string }
+  | { kind: 'trade-tap'; partnerUserId: string };
+
+async function resolveScanned(raw: string): Promise<ScanResult | null> {
+  // 1. Trade Tap URL — partner user_id payload. Matched first because the
+  //    URL embeds a UUID and would otherwise be misread as a binder UUID.
+  const ttMatch = raw.match(TRADE_TAP_RE);
+  if (ttMatch) return { kind: 'trade-tap', partnerUserId: ttMatch[1].toLowerCase() };
+  // 2. Full UUID embedded anywhere → treat as a binder id.
   const m = raw.match(UUID_RE);
-  if (m) return m[0];
-  // 2. Pretty share URL /binders/<slug-with-8-char-suffix> → resolve via RPC.
+  if (m) return { kind: 'binder', binderId: m[0] };
+  // 3. Pretty share URL /binders/<slug-with-8-char-suffix> → resolve via RPC.
   const slugMatch = raw.match(SLUG_RE);
   if (slugMatch) {
     const slug = slugMatch[1].toLowerCase();
     if (suffixFromSlug(slug)) {
       const { data, error } = await supabase.rpc('resolve_binder_slug', { p_slug: slug });
-      if (!error && typeof data === 'string') return data;
+      if (!error && typeof data === 'string') return { kind: 'binder', binderId: data };
     }
   }
   return null;
@@ -65,9 +74,14 @@ export default function ScanQRScreen() {
   async function onScan(data: string) {
     if (lockedRef.current) return;
     lockedRef.current = true;
-    const binderId = await resolveScanned(data);
-    if (binderId) {
-      router.replace({ pathname: '/binder/[id]', params: { id: binderId } });
+    const result = await resolveScanned(data);
+    if (result?.kind === 'binder') {
+      router.replace({ pathname: '/binder/[id]', params: { id: result.binderId } });
+    } else if (result?.kind === 'trade-tap') {
+      router.replace({
+        pathname: '/trade-matches/[partnerId]',
+        params: { partnerId: result.partnerUserId },
+      });
     } else {
       setError(`Unsupported QR: ${data.slice(0, 80)}`);
       setTimeout(() => {
@@ -103,7 +117,7 @@ export default function ScanQRScreen() {
             <View style={[styles.corner, styles.cornerBL]} />
             <View style={[styles.corner, styles.cornerBR]} />
           </View>
-          <Text style={styles.hint}>Point at a Pawpaw Ko binder QR code</Text>
+          <Text style={styles.hint}>Point at a Pawpaw Ko binder QR or Trade Tap code</Text>
         </View>
 
         {error ? (
