@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -11,6 +12,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -32,18 +34,36 @@ import {
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
+const artKey = (deckId: string) => `pawpaw:deckArt:${deckId}`;
+
+// Deck card grid: a fixed column count whose tile width is derived from the
+// screen width so cards scale across phone sizes (and fill the row edge-to-edge).
+const GRID_COLS = 5;
+const GRID_GAP = 8;
+const SCROLL_PAD = 16;
+
 export default function DeckEditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { session } = useAuth();
+  const { width: screenW } = useWindowDimensions();
+  const cardW = (screenW - SCROLL_PAD * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS;
 
   const [loading, setLoading] = useState(true);
   const [deck, setDeck] = useState<DeckRow | null>(null);
   const [leader, setLeader] = useState<CardInfo | null>(null);
+  // Leader alt-arts: base print + its _p variants. Chosen art is a display-only
+  // preference persisted per deck in AsyncStorage; it never changes the deck's
+  // leader_card_code (which is the validity-relevant identity).
+  const [leaderArts, setLeaderArts] = useState<
+    { card_code: string; image_url: string | null; image_url_lg: string | null }[]
+  >([]);
+  const [artIdx, setArtIdx] = useState(0);
   const [cards, setCards] = useState<DeckCardRow[]>([]);
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [validity, setValidity] = useState<Validity | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [showMissing, setShowMissing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [err, setErr] = useState('');
   const infoRef = useRef(info);
@@ -79,9 +99,34 @@ export default function DeckEditorScreen() {
     setDeck(d as DeckRow);
     const lmap = await lookupCards([d.leader_card_code]);
     setLeader(lmap[d.leader_card_code] ?? null);
+
+    // Alt arts: the base print plus its _p variants (same card number).
+    const { data: arts } = await supabase
+      .from('cards')
+      .select('card_code,image_url,image_url_lg')
+      .eq('game', GAME)
+      .like('card_code', d.leader_card_code + '%');
+    const artRe = new RegExp(
+      `^${String(d.leader_card_code).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(_p\\d+)?$`,
+      'i',
+    );
+    const list = (arts ?? [])
+      .filter((c: any) => artRe.test(c.card_code))
+      .sort((a: any, b: any) => a.card_code.localeCompare(b.card_code));
+    setLeaderArts(list);
+    const saved = await AsyncStorage.getItem(artKey(d.id));
+    setArtIdx(Math.max(0, list.findIndex((c) => c.card_code === saved)));
+
     await reloadCards(d.id);
     setLoading(false);
   }, [id, reloadCards, router]);
+
+  function cycleArt() {
+    if (leaderArts.length < 2 || !deck) return;
+    const next = (artIdx + 1) % leaderArts.length;
+    setArtIdx(next);
+    AsyncStorage.setItem(artKey(deck.id), leaderArts[next].card_code).catch(() => {});
+  }
 
   useEffect(() => {
     open();
@@ -213,20 +258,27 @@ export default function DeckEditorScreen() {
   const selectedRow = cards.find((r) => r.card_code === selected) ?? null;
   const total = validity?.total_cards ?? 0;
   const publishable = !!(validity?.valid && validity?.owned_complete);
+  const missingCount = validity?.missing_cards ?? 0;
+  const art = leaderArts[artIdx];
+  const leaderUri =
+    art?.image_url_lg || art?.image_url || leader?.image_url_lg || leader?.image_url || undefined;
 
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ title: deck.name }} />
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Leader + name + format */}
+        {/* Leader (tap swap icon to cycle alt arts) + name + format + actions */}
         <View style={styles.head}>
-          {leader?.image_url_lg || leader?.image_url ? (
-            <Image
-              source={{ uri: leader.image_url_lg || leader.image_url! }}
-              style={styles.leaderImg}
-              contentFit="contain"
-            />
-          ) : null}
+          <View style={styles.leaderWrap}>
+            {leaderUri ? (
+              <Image source={{ uri: leaderUri }} style={styles.leaderImg} contentFit="contain" />
+            ) : null}
+            {leaderArts.length > 1 ? (
+              <Pressable onPress={cycleArt} style={styles.artSwap} accessibilityLabel="Swap leader art">
+                <Ionicons name="sync" size={16} color="#fff" />
+              </Pressable>
+            ) : null}
+          </View>
           <View style={styles.headRight}>
             <TextInput
               defaultValue={deck.name}
@@ -243,12 +295,42 @@ export default function DeckEditorScreen() {
                 </Pressable>
               ))}
             </View>
+            {/* Publish (eye only) + delete, sized to the leader's height */}
+            <View style={styles.actionRow}>
+              <Pressable
+                onPress={() => togglePublish()}
+                disabled={!deck.is_public && !publishable}
+                accessibilityLabel={deck.is_public ? 'Unpublish deck' : 'Make deck public'}
+                style={[
+                  styles.eyeBtn,
+                  deck.is_public && styles.eyeBtnPublic,
+                  !deck.is_public && !publishable && { opacity: 0.35 },
+                ]}>
+                <Ionicons
+                  name={deck.is_public ? 'eye' : 'eye-off'}
+                  size={18}
+                  color={deck.is_public ? '#7ec96a' : colors.textSecondary}
+                />
+              </Pressable>
+              <Pressable onPress={confirmDelete} style={styles.trashBtn} accessibilityLabel="Delete deck">
+                <Ionicons name="trash-outline" size={18} color={colors.danger} />
+              </Pressable>
+              {/* Stats — to be wired to the show-stats feature later */}
+              <Pressable onPress={() => {}} style={styles.statsBtn} accessibilityLabel="Deck stats">
+                <Ionicons name="stats-chart-outline" size={18} color={colors.textSecondary} />
+              </Pressable>
+            </View>
           </View>
         </View>
 
-        {/* Counts + validity */}
+        {/* Counts + validity — tap "N missing" to highlight unowned cards */}
         <Text style={styles.counts}>
-          {total}/50 cards · {validity?.owned_cards ?? 0} owned · {validity?.missing_cards ?? 0} missing
+          {total}/50 cards · {validity?.owned_cards ?? 0} owned ·{' '}
+          <Text
+            onPress={missingCount > 0 ? () => setShowMissing((v) => !v) : undefined}
+            style={[missingCount > 0 && styles.missingLink, showMissing && styles.missingLinkActive]}>
+            {missingCount} missing
+          </Text>
         </Text>
         <View style={styles.barTrack}>
           <View style={[styles.barFill, { width: `${Math.min(100, (total / 50) * 100)}%`, backgroundColor: total > 50 ? '#d98a8a' : '#7ec96a' }]} />
@@ -263,21 +345,7 @@ export default function DeckEditorScreen() {
           </View>
         ) : null}
 
-        {/* Publish + delete row */}
-        <View style={styles.actionRow}>
-          <Pressable
-            onPress={() => togglePublish()}
-            disabled={!deck.is_public && !publishable}
-            style={[styles.eyeBtn, deck.is_public && styles.eyeBtnPublic, !deck.is_public && !publishable && { opacity: 0.35 }]}>
-            <Ionicons name={deck.is_public ? 'eye' : 'eye-off'} size={18} color={deck.is_public ? '#7ec96a' : colors.textSecondary} />
-            <Text style={[styles.eyeLabel, deck.is_public && { color: '#7ec96a' }]}>
-              {deck.is_public ? `Public · ${deck.listing_type}` : 'Make public'}
-            </Text>
-          </Pressable>
-          <Pressable onPress={confirmDelete} style={styles.trashBtn}>
-            <Ionicons name="trash-outline" size={18} color={colors.danger} />
-          </Pressable>
-        </View>
+        {/* Listing type — shown when public so the eye stays word-free */}
         {deck.is_public ? (
           <View style={styles.pillRow}>
             {['trade', 'sell', 'borrow'].map((lt) => (
@@ -327,18 +395,23 @@ export default function DeckEditorScreen() {
           {sorted.map((r) => {
             const c = info[r.card_code];
             const isSel = r.card_code === selected;
+            const isShort = r.owned < r.quantity;
+            const highlight = showMissing && isShort; // unowned copies → flag it
+            const dim = showMissing && !isShort; // fully owned → fade back
             return (
               <Pressable
                 key={r.card_code}
-                style={styles.cardTile}
+                style={[styles.cardTile, { width: cardW }, dim && styles.tileDim]}
                 onPress={() => setSelected(isSel ? null : r.card_code)}>
                 <Image
                   source={{ uri: c?.image_url ?? undefined }}
-                  style={[styles.cardImg, isSel && styles.cardImgSel]}
+                  style={[styles.cardImg, isSel && styles.cardImgSel, highlight && styles.cardImgMissing]}
                   contentFit="cover"
                 />
-                <View style={styles.qtyBadge}>
-                  <Text style={styles.qtyText}>{r.quantity > 4 ? 'X' : `x${r.quantity}`}</Text>
+                <View style={[styles.qtyBadge, highlight && styles.qtyBadgeMissing]}>
+                  <Text style={styles.qtyText}>
+                    {highlight ? `x${r.quantity - r.owned}` : r.quantity > 4 ? 'X' : `x${r.quantity}`}
+                  </Text>
                 </View>
               </Pressable>
             );
@@ -482,8 +555,20 @@ const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 48 },
 
   head: { flexDirection: 'row', gap: 14 },
+  leaderWrap: { width: 110, height: 154 },
   leaderImg: { width: 110, height: 154, borderRadius: 8 },
-  headRight: { flex: 1, justifyContent: 'flex-start', gap: 12 },
+  artSwap: {
+    position: 'absolute',
+    right: 4,
+    bottom: 4,
+    backgroundColor: 'rgba(12,10,18,0.8)',
+    borderRadius: 999,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  // Fill the leader's height: name on top, format pills mid, actions at bottom.
+  headRight: { flex: 1, justifyContent: 'space-between' },
   nameInput: {
     borderWidth: 1,
     borderColor: colors.border,
@@ -496,25 +581,42 @@ const styles = StyleSheet.create({
   },
 
   counts: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, marginTop: 16 },
+  missingLink: { color: colors.accent, textDecorationLine: 'underline' },
+  missingLinkActive: { color: '#d98a8a', fontFamily: fonts.serifBold },
   barTrack: { height: 10, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden', marginTop: 8 },
   barFill: { height: '100%' },
   problems: { marginTop: 8 },
   problem: { color: '#d98a8a', fontFamily: fonts.body, fontSize: 12, lineHeight: 18 },
 
-  actionRow: { flexDirection: 'row', gap: 10, marginTop: 14, alignItems: 'center' },
+  actionRow: { flexDirection: 'row', gap: 8 },
   eyeBtn: {
-    flexDirection: 'row',
+    width: 44,
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 8,
-    paddingHorizontal: 12,
     paddingVertical: 8,
   },
   eyeBtnPublic: { borderColor: '#7ec96a' },
-  eyeLabel: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13 },
-  trashBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 9 },
+  trashBtn: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingVertical: 8,
+  },
+  statsBtn: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingVertical: 8,
+  },
 
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 8 },
 
@@ -555,10 +657,12 @@ const styles = StyleSheet.create({
   },
   addCardsText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 1 },
 
-  cardGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-  cardTile: { width: '18.5%', position: 'relative' },
+  cardGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: GRID_GAP, marginTop: 12 },
+  cardTile: { position: 'relative' },
+  tileDim: { opacity: 0.3 },
   cardImg: { width: '100%', aspectRatio: 0.72, borderRadius: 6 },
   cardImgSel: { borderWidth: 2, borderColor: colors.accent },
+  cardImgMissing: { borderWidth: 2, borderColor: '#d98a8a' },
   qtyBadge: {
     position: 'absolute',
     top: 3,
@@ -570,6 +674,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 1,
   },
+  qtyBadgeMissing: { backgroundColor: '#d98a8a', borderColor: '#d98a8a' },
   qtyText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 11 },
 
   pillRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
