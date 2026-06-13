@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -19,7 +20,6 @@ import {
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
 import { useAuth } from '@/lib/auth';
-import { FLAIR_STYLES } from '@/lib/binder-constants';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
@@ -29,6 +29,7 @@ type Binder = {
   description: string | null;
   category: string;
   flair: string;
+  sleeve_image_url: string | null;
 };
 
 type Category = 'optcg' | 'pokemon';
@@ -46,39 +47,9 @@ const FLAIRS: { value: Flair; label: string }[] = [
 
 // OPTCG before Pokémon. Within each game, preserve created_at order from the query.
 const GAME_ORDER: Category[] = ['optcg', 'pokemon'];
-
-// Per-IP shelf banner treatment. Color + text styling differ to evoke each
-// IP's brand identity — One Piece bold Jolly-Roger red, Pokémon yellow with
-// a hard blue drop-shadow nodding at the classic logo.
-type ShelfBanner = {
-  label: string;
-  lineColor: string;
-  textColor: string;
-  fontSize: number;
-  letterSpacing: number;
-  textShadowColor?: string;
-  textShadowOffset?: { width: number; height: number };
-  textShadowRadius?: number;
-};
-
-const SHELF_BANNER: Record<Category, ShelfBanner> = {
-  optcg: {
-    label: 'ONE PIECE',
-    lineColor: '#c8232a',
-    textColor: '#c8232a',
-    fontSize: 15,
-    letterSpacing: 8,
-  },
-  pokemon: {
-    label: 'POKÉMON',
-    lineColor: '#3d7dca',
-    textColor: '#ffcb05',
-    fontSize: 16,
-    letterSpacing: 5,
-    textShadowColor: '#3d7dca',
-    textShadowOffset: { width: 1.5, height: 1.5 },
-    textShadowRadius: 0,
-  },
+const GAME_LABEL: Record<Category, string> = {
+  optcg: 'One Piece TCG',
+  pokemon: 'Pokémon',
 };
 
 function groupByGame(rows: Binder[]): { game: Category; data: Binder[] }[] {
@@ -93,6 +64,7 @@ export default function MyBindersScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const hasLoadedOnce = useRef(false);
   const [rows, setRows] = useState<Binder[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -104,7 +76,7 @@ export default function MyBindersScreen() {
       if (mode === 'pull') setRefreshing(true);
       const { data, error } = await supabase
         .from('binders')
-        .select('id,name,description,category,flair')
+        .select('id,name,description,category,flair,sleeve_image_url')
         .eq('user_id', session.user.id)
         .order('created_at', { ascending: true });
       if (mode === 'initial') setLoading(false);
@@ -114,7 +86,19 @@ export default function MyBindersScreen() {
         console.warn('binders fetch error', error.message);
         return;
       }
-      setRows(data ?? []);
+      const binders = data ?? [];
+      setRows(binders);
+      // Listing counts per binder, in parallel — mirrors the web card's "N listings".
+      const entries = await Promise.all(
+        binders.map(async (b) => {
+          const { count } = await supabase
+            .from('listings')
+            .select('id', { count: 'exact', head: true })
+            .eq('binder_id', b.id);
+          return [b.id, count ?? 0] as const;
+        }),
+      );
+      setCounts(Object.fromEntries(entries));
     },
     [session?.user.id],
   );
@@ -166,7 +150,13 @@ export default function MyBindersScreen() {
             <Text style={styles.empty}>No binders yet — tap + to create one.</Text>
           ) : (
             groups.map(({ game, data }) => (
-              <Shelf key={game} game={game} binders={data} onOpen={openBinder} />
+              <GameSection
+                key={game}
+                game={game}
+                binders={data}
+                counts={counts}
+                onOpen={openBinder}
+              />
             ))
           )}
         </ScrollView>
@@ -185,84 +175,64 @@ export default function MyBindersScreen() {
   );
 }
 
-const BINDER_W = 96;
-const BINDER_H = 132;
-
-function Shelf({
+function GameSection({
   game,
   binders,
+  counts,
   onOpen,
 }: {
   game: Category;
   binders: Binder[];
+  counts: Record<string, number>;
   onOpen: (id: string) => void;
 }) {
-  const banner = SHELF_BANNER[game];
-  const rows: Binder[][] = [];
-  for (let i = 0; i < binders.length; i += 2) rows.push(binders.slice(i, i + 2));
-
   return (
-    <View style={styles.shelfWrap}>
-      <View style={styles.shelfLabel}>
-        <View style={[styles.shelfLabelLine, { backgroundColor: banner.lineColor }]} />
-        <Text
-          style={[
-            styles.shelfLabelText,
-            {
-              color: banner.textColor,
-              fontSize: banner.fontSize,
-              letterSpacing: banner.letterSpacing,
-              textShadowColor: banner.textShadowColor,
-              textShadowOffset: banner.textShadowOffset,
-              textShadowRadius: banner.textShadowRadius,
-            },
-          ]}>
-          {banner.label}
-        </Text>
-        <View style={[styles.shelfLabelLine, { backgroundColor: banner.lineColor }]} />
-      </View>
-
-      <View style={styles.shelfContent}>
-        {rows.map((row, i) => (
-          <View key={i} style={styles.binderRow}>
-            {row.map((b) => (
-              <BinderIcon key={b.id} binder={b} onPress={() => onOpen(b.id)} />
-            ))}
-            {row.length === 1 ? <View style={{ width: BINDER_W }} /> : null}
-          </View>
-        ))}
-      </View>
-
-      <View style={styles.shelfPlankTop} />
-      <View style={styles.shelfPlank} />
-      <View style={styles.shelfPlankShadow} />
+    <View style={styles.groupWrap}>
+      <Text style={styles.groupTitle}>{GAME_LABEL[game].toUpperCase()}</Text>
+      {binders.map((b) => (
+        <BinderCard key={b.id} binder={b} count={counts[b.id] ?? 0} onPress={() => onOpen(b.id)} />
+      ))}
     </View>
   );
 }
 
-function BinderIcon({ binder, onPress }: { binder: Binder; onPress: () => void }) {
-  const flair = FLAIR_STYLES[binder.flair] ?? { label: 'Binder', color: colors.accent };
+function BinderCard({
+  binder,
+  count,
+  onPress,
+}: {
+  binder: Binder;
+  count: number;
+  onPress: () => void;
+}) {
+  const hasCover = !!binder.sleeve_image_url;
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.binderSlot, pressed && { transform: [{ translateY: 1 }] }]}
+      style={({ pressed }) => [styles.binderCard, pressed && { borderColor: colors.accent }]}
       accessibilityLabel={`${binder.name} binder`}>
-      <View style={[styles.binderBody, { backgroundColor: flair.color }]}>
-        <View style={styles.binderTopHighlight} />
-        <View style={styles.binderRightShade} />
-        <View style={styles.binderBottomShadow} />
-        <View style={styles.binderLabel}>
-          <Text
-            style={styles.binderLabelText}
-            numberOfLines={3}
-            ellipsizeMode="tail"
-            textBreakStrategy="simple">
-            {binder.name}
-          </Text>
-        </View>
+      <View style={styles.cardSleeve}>
+        {hasCover ? (
+          <Image
+            source={{ uri: binder.sleeve_image_url! }}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+          />
+        ) : (
+          <Ionicons name="albums-outline" size={40} color={colors.textMuted} style={{ opacity: 0.5 }} />
+        )}
       </View>
-      <View style={styles.binderFlairWrap}>
-        <FlairPill value={binder.flair} kind="flair" size="sm" />
+      <View style={styles.cardBody}>
+        <Text style={styles.cardName} numberOfLines={1} ellipsizeMode="tail">
+          {binder.name}
+        </Text>
+        <View style={styles.cardPills}>
+          <FlairPill value={binder.category} kind="category" size="sm" />
+          <FlairPill value={binder.flair} kind="flair" size="sm" />
+        </View>
+        <Text style={styles.cardCount}>
+          {count} {count === 1 ? 'listing' : 'listings'}
+        </Text>
       </View>
     </Pressable>
   );
@@ -419,115 +389,52 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 32 },
   empty: { textAlign: 'center', marginTop: 48, color: colors.textMuted, fontFamily: fonts.body },
 
-  // ---- Shelf ----
-  shelfWrap: { paddingTop: 28 },
-  shelfLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 24,
-    marginBottom: 18,
-  },
-  shelfLabelLine: { flex: 1, height: 1, opacity: 0.55 },
-  shelfLabelText: {
-    fontFamily: fonts.serifBold,
-    fontSize: 13,
-    letterSpacing: 6,
-  },
-  shelfContent: { paddingHorizontal: 16 },
-  binderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'flex-end',
-    marginBottom: 10,
-  },
-  // Wooden shelf plank — a thin highlighted top, the plank body, then a
-  // darker underside-shadow band to suggest depth beneath.
-  shelfPlankTop: { height: 1, backgroundColor: '#a07c52' },
-  shelfPlank: {
-    height: 9,
-    backgroundColor: '#6b4a2a',
-    borderTopWidth: 1,
-    borderTopColor: '#8a6841',
+  // ---- Game section ----
+  groupWrap: { paddingHorizontal: 16, paddingTop: 24 },
+  groupTitle: {
+    fontFamily: fonts.serif,
+    fontSize: 12,
+    letterSpacing: 3,
+    color: colors.textSecondary,
+    paddingBottom: 8,
+    marginBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#2e1d10',
-  },
-  shelfPlankShadow: {
-    height: 6,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderBottomColor: colors.border,
   },
 
-  // ---- Binder icon ----
-  binderSlot: {
-    width: BINDER_W,
-    alignItems: 'center',
-    gap: 8,
-  },
-  binderBody: {
-    width: BINDER_W,
-    height: BINDER_H,
-    borderRadius: 3,
+  // ---- Binder card ----
+  binderCard: {
+    backgroundColor: colors.bgCard,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
     overflow: 'hidden',
+    marginBottom: 14,
+  },
+  cardSleeve: {
+    width: '100%',
+    aspectRatio: 1.4,
+    backgroundColor: colors.bgSecondary,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOpacity: 0.4,
-        shadowOffset: { width: 2, height: 5 },
-        shadowRadius: 5,
-      },
-      android: { elevation: 6 },
-    }),
   },
-  binderTopHighlight: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-  },
-  binderRightShade: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    right: 0,
-    width: 6,
-    backgroundColor: 'rgba(0,0,0,0.28)',
-  },
-  binderBottomShadow: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 5,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  binderLabel: {
-    backgroundColor: 'rgba(0,0,0,0.22)',
-    paddingHorizontal: 4,
-    paddingVertical: 6,
-    borderRadius: 2,
-    // Right shade is absolutely positioned, so it doesn't consume layout
-    // space — just nudge the label slightly off the right edge.
-    marginLeft: 2,
-    marginRight: 10,
-    width: BINDER_W - 14,
-  },
-  binderLabelText: {
-    color: '#fff',
-    fontFamily: fonts.serifBold,
-    fontSize: 10,
-    lineHeight: 13,
+  cardBody: { padding: 14 },
+  cardName: {
+    fontFamily: fonts.serif,
+    fontSize: 16,
     letterSpacing: 0.5,
-    textAlign: 'center',
-    includeFontPadding: false,
+    color: colors.textPrimary,
+    marginBottom: 8,
   },
-  binderFlairWrap: {
-    height: 22, // reserve a constant pill-height so binder bottoms align across the row
-    justifyContent: 'flex-start',
-    alignItems: 'center',
+  cardPills: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  cardCount: {
+    fontFamily: fonts.serif,
+    fontSize: 11,
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
+    color: colors.accent,
   },
 
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 24 },
