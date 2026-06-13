@@ -66,6 +66,16 @@ function AuthGate() {
           headerTitleStyle: { fontFamily: 'Cinzel_500Medium' },
         }}
       />
+      <Stack.Screen
+        name="deck/[id]"
+        options={{
+          headerShown: true,
+          title: 'Deck',
+          headerStyle: { backgroundColor: colors.bgSecondary },
+          headerTintColor: colors.textPrimary,
+          headerTitleStyle: { fontFamily: 'Cinzel_500Medium' },
+        }}
+      />
       <Stack.Screen name="scan" options={{ presentation: 'modal', animation: 'fade' }} />
       <Stack.Screen
         name="nearby"

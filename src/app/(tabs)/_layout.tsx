@@ -147,6 +147,13 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
+          name="decks"
+          options={{
+            title: '',
+            tabBarIcon: ({ color, size }) => <Ionicons name="layers-outline" size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="profile"
           options={{
             title: '',
