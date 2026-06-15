@@ -69,6 +69,23 @@ export default function DeckEditorScreen() {
   const infoRef = useRef(info);
   infoRef.current = info;
 
+  // Owner vs shared-deck collaborator. Card editing works for any member via
+  // RLS, so we only gate owner-only controls (publish / delete / partner mgmt).
+  const isOwner = !!(deck && session?.user.id && deck.user_id === session.user.id);
+
+  // Partner management (owner-only; share_deck validates the named account is
+  // your trade-binder co-owner for this game).
+  const [partners, setPartners] = useState<{ user_id: string; display_name: string }[]>([]);
+  const [partnerName, setPartnerName] = useState('');
+  const [partnerBusy, setPartnerBusy] = useState(false);
+  const [partnerMsg, setPartnerMsg] = useState<string | null>(null);
+
+  const loadPartners = useCallback(async () => {
+    if (!id) return;
+    const { data } = await supabase.rpc('deck_collaborators_list', { p_deck_id: id });
+    setPartners((data as { user_id: string; display_name: string }[]) ?? []);
+  }, [id]);
+
   const reloadCards = useCallback(
     async (deckId: string) => {
       const { data } = await supabase
@@ -126,6 +143,35 @@ export default function DeckEditorScreen() {
     const next = (artIdx + 1) % leaderArts.length;
     setArtIdx(next);
     AsyncStorage.setItem(artKey(deck.id), leaderArts[next].card_code).catch(() => {});
+  }
+
+  useEffect(() => {
+    if (deck && isOwner) loadPartners();
+  }, [deck, isOwner, loadPartners]);
+
+  async function invitePartner() {
+    const nm = partnerName.trim();
+    if (!nm) return;
+    setPartnerBusy(true);
+    setPartnerMsg(null);
+    const { error } = await supabase.rpc('share_deck', { p_deck_id: id, p_display_name: nm });
+    setPartnerBusy(false);
+    if (error) {
+      setPartnerMsg(error.message);
+      return;
+    }
+    setPartnerName('');
+    setPartnerMsg(`Invite sent to ${nm} — they'll get a notification to accept.`);
+    loadPartners();
+  }
+
+  async function removePartner(uid: string) {
+    const { error } = await supabase.rpc('unshare_deck', { p_deck_id: id, p_user_id: uid });
+    if (error) {
+      setPartnerMsg(error.message);
+      return;
+    }
+    loadPartners();
   }
 
   useEffect(() => {
@@ -295,26 +341,31 @@ export default function DeckEditorScreen() {
                 </Pressable>
               ))}
             </View>
-            {/* Publish (eye only) + delete, sized to the leader's height */}
+            {/* Publish (eye only) + delete, sized to the leader's height.
+                Publish/delete are owner-only; collaborators co-edit cards. */}
             <View style={styles.actionRow}>
-              <Pressable
-                onPress={() => togglePublish()}
-                disabled={!deck.is_public && !publishable}
-                accessibilityLabel={deck.is_public ? 'Unpublish deck' : 'Make deck public'}
-                style={[
-                  styles.eyeBtn,
-                  deck.is_public && styles.eyeBtnPublic,
-                  !deck.is_public && !publishable && { opacity: 0.35 },
-                ]}>
-                <Ionicons
-                  name={deck.is_public ? 'eye' : 'eye-off'}
-                  size={18}
-                  color={deck.is_public ? '#7ec96a' : colors.textSecondary}
-                />
-              </Pressable>
-              <Pressable onPress={confirmDelete} style={styles.trashBtn} accessibilityLabel="Delete deck">
-                <Ionicons name="trash-outline" size={18} color={colors.danger} />
-              </Pressable>
+              {isOwner ? (
+                <>
+                  <Pressable
+                    onPress={() => togglePublish()}
+                    disabled={!deck.is_public && !publishable}
+                    accessibilityLabel={deck.is_public ? 'Unpublish deck' : 'Make deck public'}
+                    style={[
+                      styles.eyeBtn,
+                      deck.is_public && styles.eyeBtnPublic,
+                      !deck.is_public && !publishable && { opacity: 0.35 },
+                    ]}>
+                    <Ionicons
+                      name={deck.is_public ? 'eye' : 'eye-off'}
+                      size={18}
+                      color={deck.is_public ? '#7ec96a' : colors.textSecondary}
+                    />
+                  </Pressable>
+                  <Pressable onPress={confirmDelete} style={styles.trashBtn} accessibilityLabel="Delete deck">
+                    <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                  </Pressable>
+                </>
+              ) : null}
               {/* Stats — to be wired to the show-stats feature later */}
               <Pressable onPress={() => {}} style={styles.statsBtn} accessibilityLabel="Deck stats">
                 <Ionicons name="stats-chart-outline" size={18} color={colors.textSecondary} />
@@ -353,6 +404,48 @@ export default function DeckEditorScreen() {
                 <Text style={[styles.pillText, deck.listing_type === lt && styles.pillTextActive]}>{lt}</Text>
               </Pressable>
             ))}
+          </View>
+        ) : null}
+
+        {/* Share with partner (owner-only; goes to your trade-binder partner) */}
+        {isOwner ? (
+          <View style={styles.partnerSection}>
+            <Text style={styles.partnerLabel}>Share with partner</Text>
+            {partners.length > 0 ? (
+              partners.map((p) => (
+                <View key={p.user_id} style={styles.partnerChip}>
+                  <Text style={styles.partnerChipName}>{p.display_name || 'partner'}</Text>
+                  <Pressable
+                    onPress={() => removePartner(p.user_id)}
+                    hitSlop={8}
+                    accessibilityLabel="Remove partner">
+                    <Ionicons name="close" size={16} color={colors.textMuted} />
+                  </Pressable>
+                </View>
+              ))
+            ) : (
+              <View style={styles.partnerRow}>
+                <TextInput
+                  value={partnerName}
+                  onChangeText={setPartnerName}
+                  placeholder="Partner's display name"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  style={styles.partnerInput}
+                />
+                <Pressable
+                  disabled={partnerBusy || !partnerName.trim()}
+                  onPress={invitePartner}
+                  style={[styles.partnerBtn, (partnerBusy || !partnerName.trim()) && { opacity: 0.4 }]}>
+                  {partnerBusy ? (
+                    <ActivityIndicator color={colors.bgPrimary} />
+                  ) : (
+                    <Text style={styles.partnerBtnText}>Invite</Text>
+                  )}
+                </Pressable>
+              </View>
+            )}
+            {partnerMsg ? <Text style={styles.partnerMsg}>{partnerMsg}</Text> : null}
           </View>
         ) : null}
 
@@ -619,6 +712,53 @@ const styles = StyleSheet.create({
   },
 
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 8 },
+
+  // Share-with-partner (shared decks)
+  partnerSection: { marginTop: 18 },
+  partnerLabel: {
+    color: colors.textSecondary,
+    fontFamily: fonts.serifBold,
+    fontSize: 11,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  partnerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginTop: 4,
+  },
+  partnerChipName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+  partnerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  partnerInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.textPrimary,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    backgroundColor: colors.bgSecondary,
+  },
+  partnerBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.lg,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  partnerBtnText: { color: colors.bgPrimary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
 
   editor: {
     flexDirection: 'row',

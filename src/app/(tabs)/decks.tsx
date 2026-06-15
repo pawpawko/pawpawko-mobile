@@ -36,7 +36,7 @@ import { colors, fonts, radius } from '@/lib/theme';
 
 type Format = 'standard' | 'eternal';
 
-type DeckTile = DeckRow & { leader?: CardInfo; valid?: boolean; total?: number };
+type DeckTile = DeckRow & { leader?: CardInfo; valid?: boolean; total?: number; _shared?: boolean };
 
 export default function DecksScreen() {
   const { session } = useAuth();
@@ -54,12 +54,17 @@ export default function DecksScreen() {
       if (mode === 'initial') setLoading(true);
       if (mode === 'pull') setRefreshing(true);
       await loadRules();
-      const { data: decks } = await supabase
-        .from('decks')
-        .select('id,user_id,game,leader_card_code,name,is_public,listing_type,format,created_at')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: true });
-      const rows = (decks ?? []) as DeckRow[];
+      const [ownRes, sharedRes] = await Promise.all([
+        supabase
+          .from('decks')
+          .select('id,user_id,game,leader_card_code,name,is_public,listing_type,format,created_at')
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: true }),
+        supabase.rpc('shared_decks'), // decks shared WITH me
+      ]);
+      const own = ((ownRes.data ?? []) as DeckRow[]).map((d) => ({ ...d, _shared: false }));
+      const shared = ((sharedRes.data ?? []) as DeckRow[]).map((d) => ({ ...d, _shared: true }));
+      const rows = [...own, ...shared];
       const leaderCodes = [...new Set(rows.map((d) => d.leader_card_code))];
       const leaderMap: Record<string, CardInfo> = leaderCodes.length
         ? await lookupCards(leaderCodes)
@@ -136,6 +141,7 @@ export default function DecksScreen() {
                     <Badge label={d.valid ? 'valid' : 'cooking'} tone={d.valid ? 'ok' : 'bad'} />
                     {d.format === 'eternal' ? <Badge label="eternal" tone="etern" /> : null}
                     {d.is_public ? <Badge label={d.listing_type ?? 'public'} tone="pub" /> : null}
+                    {d._shared ? <Badge label="shared" tone="shared" /> : null}
                   </View>
                 </View>
               </Pressable>
@@ -163,6 +169,7 @@ const TONE: Record<string, string> = {
   bad: '#d98a8a',
   pub: '#ddb896',
   etern: '#b07cc6',
+  shared: '#c9956a',
 };
 
 function Badge({ label, tone }: { label: string; tone: keyof typeof TONE | string }) {
