@@ -30,6 +30,7 @@ type Binder = {
   category: string;
   flair: string;
   sleeve_image_url: string | null;
+  _shared?: boolean; // a binder shared WITH me (I'm a co-editor, not the owner)
 };
 
 type Category = 'optcg' | 'pokemon';
@@ -74,19 +75,32 @@ export default function MyBindersScreen() {
       if (!session?.user.id) return;
       if (mode === 'initial') setLoading(true);
       if (mode === 'pull') setRefreshing(true);
-      const { data, error } = await supabase
-        .from('binders')
-        .select('id,name,description,category,flair,sleeve_image_url')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: true });
+      const [ownRes, sharedRes] = await Promise.all([
+        supabase
+          .from('binders')
+          .select('id,name,description,category,flair,sleeve_image_url')
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: true }),
+        supabase.rpc('shared_binders'), // binders shared WITH me
+      ]);
       if (mode === 'initial') setLoading(false);
       if (mode === 'pull') setRefreshing(false);
       hasLoadedOnce.current = true;
-      if (error) {
-        console.warn('binders fetch error', error.message);
+      if (ownRes.error) {
+        console.warn('binders fetch error', ownRes.error.message);
         return;
       }
-      const binders = data ?? [];
+      const own = (ownRes.data ?? []) as Binder[];
+      const shared = ((sharedRes.data ?? []) as Binder[]).map((b) => ({
+        id: b.id,
+        name: b.name,
+        description: b.description,
+        category: b.category,
+        flair: b.flair,
+        sleeve_image_url: b.sleeve_image_url,
+        _shared: true,
+      }));
+      const binders = [...own, ...shared];
       setRows(binders);
       // Listing counts per binder, in parallel — mirrors the web card's "N listings".
       const entries = await Promise.all(
@@ -229,6 +243,11 @@ function BinderCard({
         <View style={styles.cardPills}>
           <FlairPill value={binder.category} kind="category" size="sm" />
           <FlairPill value={binder.flair} kind="flair" size="sm" />
+          {binder._shared ? (
+            <View style={styles.sharedPill}>
+              <Text style={styles.sharedPillText}>SHARED</Text>
+            </View>
+          ) : null}
         </View>
         <Text style={styles.cardCount}>
           {count} {count === 1 ? 'listing' : 'listings'}
@@ -428,7 +447,16 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     marginBottom: 8,
   },
-  cardPills: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  cardPills: { flexDirection: 'row', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  sharedPill: {
+    borderWidth: 1,
+    borderColor: colors.borderAccent,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    justifyContent: 'center',
+  },
+  sharedPillText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 9, letterSpacing: 1 },
   cardCount: {
     fontFamily: fonts.serif,
     fontSize: 11,

@@ -109,6 +109,8 @@ export default function BinderDetailScreen() {
   const [loading, setLoading] = useState(true);
 
   const [isOwner, setIsOwner] = useState(false);
+  const [isCollab, setIsCollab] = useState(false); // shared-binder co-editor
+  const canEdit = isOwner || isCollab;
   const [editOpen, setEditOpen] = useState(false);
 
   // Full edit-mode state
@@ -135,26 +137,45 @@ export default function BinderDetailScreen() {
   const shareUrl = id && header ? binderShareUrl(header.display_name, header.binder_name, id) : '';
   const pageSize = PAGE_SIZE[layout];
 
-  // ---- Ownership check ----
+  // ---- Ownership / collaborator check ----
+  // Owner OR a shared-binder collaborator may co-edit (RLS allows both); only
+  // the owner gets settings/rename/flair/delete + partner management.
   useEffect(() => {
-    if (!id || !session?.user.id) {
+    const uid = session?.user.id;
+    if (!id || !uid) {
       setIsOwner(false);
+      setIsCollab(false);
       return;
     }
-    supabase
-      .from('binders')
-      .select('user_id,layout')
-      .eq('id', id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.user_id === session.user.id) {
-          setIsOwner(true);
-          if (data.layout === '3x3' || data.layout === '4x3') {
-            setLayout(data.layout);
-            setSortMode(data.layout === '3x3' ? 'custom-3x3' : 'custom-4x3');
-          }
-        }
-      });
+    let cancelled = false;
+    (async () => {
+      const { data: b } = await supabase
+        .from('binders')
+        .select('user_id,layout')
+        .eq('id', id)
+        .maybeSingle();
+      if (cancelled) return;
+      const owner = b?.user_id === uid;
+      setIsOwner(owner);
+      if (b && (b.layout === '3x3' || b.layout === '4x3')) {
+        setLayout(b.layout);
+        setSortMode(b.layout === '3x3' ? 'custom-3x3' : 'custom-4x3');
+      }
+      if (owner) {
+        setIsCollab(false);
+        return;
+      }
+      const { data: c } = await supabase
+        .from('binder_collaborators')
+        .select('user_id')
+        .eq('binder_id', id)
+        .eq('user_id', uid)
+        .maybeSingle();
+      if (!cancelled) setIsCollab(!!c);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [id, session?.user.id]);
 
   // ---- Initial load ----
@@ -163,7 +184,7 @@ export default function BinderDetailScreen() {
     if (!opts?.silent) setLoading(true);
     const [hRes, lRes] = await Promise.all([
       supabase.rpc('get_binder_public', { p_binder_id: id }),
-      isOwner
+      canEdit
         ? supabase
             .from('listings')
             .select('id, quantity, listing_type, card_code, sort_order')
@@ -199,7 +220,7 @@ export default function BinderDetailScreen() {
     }
     if (!opts?.silent) setLoading(false);
     return lst;
-  }, [id, isOwner]);
+  }, [id, canEdit]);
 
   useEffect(() => {
     loadAll();
@@ -389,7 +410,7 @@ export default function BinderDetailScreen() {
           title: editMode ? 'EDIT BINDER' : 'Binder',
           headerRight: () => (
             <View style={{ flexDirection: 'row' }}>
-              {isOwner && !editMode ? (
+              {canEdit && !editMode ? (
                 <Pressable
                   onPress={() => setEditMode(true)}
                   style={({ pressed }) => ({ paddingHorizontal: 8, opacity: pressed ? 0.6 : 1 })}
@@ -443,7 +464,7 @@ export default function BinderDetailScreen() {
               setSortMode(layout === '3x3' ? 'custom-3x3' : 'custom-4x3');
             }}
             onAddCards={() => setBrowserOpen(true)}
-            onOpenSettings={() => setEditOpen(true)}
+            onOpenSettings={isOwner ? () => setEditOpen(true) : undefined}
           />
         ) : null}
 
@@ -534,6 +555,7 @@ export default function BinderDetailScreen() {
       <EditBinderModal
         visible={editOpen}
         onClose={() => setEditOpen(false)}
+        binderId={id ?? ''}
         currentName={header.binder_name ?? ''}
         currentFlair={(header.flair as Flair) ?? 'trade'}
         onSaveName={saveName}
@@ -725,7 +747,7 @@ function EditToolbar({
   aestheticsMode: boolean;
   onToggleAesthetics: () => void;
   onAddCards: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings?: () => void; // owner-only; hidden for collaborators
 }) {
   return (
     <View style={styles.toolbar}>
@@ -743,12 +765,14 @@ function EditToolbar({
           color={aestheticsMode ? colors.bgPrimary : colors.accent}
         />
       </Pressable>
-      <Pressable
-        onPress={onOpenSettings}
-        style={({ pressed }) => [styles.toolbarIconBtn, pressed && { opacity: 0.7 }]}
-        accessibilityLabel="Binder settings">
-        <Ionicons name="settings-outline" size={18} color={colors.accent} />
-      </Pressable>
+      {onOpenSettings ? (
+        <Pressable
+          onPress={onOpenSettings}
+          style={({ pressed }) => [styles.toolbarIconBtn, pressed && { opacity: 0.7 }]}
+          accessibilityLabel="Binder settings">
+          <Ionicons name="settings-outline" size={18} color={colors.accent} />
+        </Pressable>
+      ) : null}
       <Pressable
         style={({ pressed }) => [styles.toolbarBtnPrimary, pressed && { opacity: 0.7 }]}
         onPress={onAddCards}
@@ -1014,6 +1038,7 @@ function DraggableTile({
 function EditBinderModal({
   visible,
   onClose,
+  binderId,
   currentName,
   currentFlair,
   onSaveName,
@@ -1022,6 +1047,7 @@ function EditBinderModal({
 }: {
   visible: boolean;
   onClose: () => void;
+  binderId: string;
   currentName: string;
   currentFlair: Flair;
   onSaveName: (next: string) => Promise<boolean>;
@@ -1031,9 +1057,51 @@ function EditBinderModal({
   const [name, setName] = useState(currentName);
   const [savingName, setSavingName] = useState(false);
 
+  // Partner management (trade binders only; mirrors the web collab section).
+  const [partners, setPartners] = useState<{ user_id: string; display_name: string }[]>([]);
+  const [partnerName, setPartnerName] = useState('');
+  const [partnerBusy, setPartnerBusy] = useState(false);
+  const [partnerMsg, setPartnerMsg] = useState<string | null>(null);
+
+  const loadPartners = useCallback(async () => {
+    if (!binderId) return;
+    const { data } = await supabase.rpc('binder_collaborators_list', { p_binder_id: binderId });
+    setPartners((data as { user_id: string; display_name: string }[]) ?? []);
+  }, [binderId]);
+
   useEffect(() => {
-    if (visible) setName(currentName);
-  }, [visible, currentName]);
+    if (visible) {
+      setName(currentName);
+      setPartnerName('');
+      setPartnerMsg(null);
+      if (currentFlair === 'trade') loadPartners();
+    }
+  }, [visible, currentName, currentFlair, loadPartners]);
+
+  async function invitePartner() {
+    const nm = partnerName.trim();
+    if (!nm) return;
+    setPartnerBusy(true);
+    setPartnerMsg(null);
+    const { error } = await supabase.rpc('share_binder', { p_binder_id: binderId, p_display_name: nm });
+    setPartnerBusy(false);
+    if (error) {
+      setPartnerMsg(error.message);
+      return;
+    }
+    setPartnerName('');
+    setPartnerMsg(`Invite sent to ${nm} — they'll get a notification to accept.`);
+    loadPartners();
+  }
+
+  async function removePartner(uid: string) {
+    const { error } = await supabase.rpc('unshare_binder', { p_binder_id: binderId, p_user_id: uid });
+    if (error) {
+      setPartnerMsg(error.message);
+      return;
+    }
+    loadPartners();
+  }
 
   async function commitName() {
     if (name.trim() === currentName.trim() || !name.trim()) {
@@ -1098,6 +1166,51 @@ function EditBinderModal({
                 <Text style={styles.shareBtnText}>SAVE NAME</Text>
               )}
             </Pressable>
+
+            {currentFlair === 'trade' ? (
+              <View style={styles.partnerSection}>
+                <Text style={styles.editLabel}>Share with partner</Text>
+                {partners.length > 0 ? (
+                  partners.map((p) => (
+                    <View key={p.user_id} style={styles.partnerChip}>
+                      <Text style={styles.partnerChipName}>{p.display_name || 'partner'}</Text>
+                      <Pressable
+                        onPress={() => removePartner(p.user_id)}
+                        hitSlop={8}
+                        accessibilityLabel="Remove partner">
+                        <Ionicons name="close" size={16} color={colors.textMuted} />
+                      </Pressable>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.partnerInviteRow}>
+                    <TextInput
+                      value={partnerName}
+                      onChangeText={setPartnerName}
+                      placeholder="Partner's display name"
+                      placeholderTextColor={colors.textMuted}
+                      autoCapitalize="none"
+                      style={[styles.editInput, styles.partnerInput]}
+                    />
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.partnerInviteBtn,
+                        (partnerBusy || !partnerName.trim()) && styles.editSaveDisabled,
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      disabled={partnerBusy || !partnerName.trim()}
+                      onPress={invitePartner}>
+                      {partnerBusy ? (
+                        <ActivityIndicator color={colors.bgPrimary} />
+                      ) : (
+                        <Text style={styles.partnerInviteBtnText}>Invite</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                )}
+                {partnerMsg ? <Text style={styles.partnerMsg}>{partnerMsg}</Text> : null}
+              </View>
+            ) : null}
 
             <Pressable
               style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}
@@ -2381,6 +2494,34 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     fontSize: 12,
   },
+
+  // Partner management (shared binders)
+  partnerSection: { marginTop: 8, marginBottom: 4 },
+  partnerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginTop: 4,
+  },
+  partnerChipName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+  partnerInviteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  partnerInput: { flex: 1, marginBottom: 0 },
+  partnerInviteBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radius.lg,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  partnerInviteBtnText: { color: colors.bgPrimary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
 
   sheetImg: { width: 140, aspectRatio: 0.72, alignSelf: 'center', borderRadius: radius.sm },
 
