@@ -178,6 +178,29 @@ export default function DeckEditorScreen() {
     open();
   }, [open]);
 
+  // ---- Realtime: a partner's edit on a shared deck refreshes it live ----
+  // (public.deck_cards is in the Realtime publication.) Steps are
+  // write-then-reloadCards, so a debounced reload here only adds partner edits.
+  const rtTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!id) return;
+    const channel = supabase
+      .channel('deckcards-' + id)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'deck_cards', filter: 'deck_id=eq.' + id },
+        () => {
+          if (rtTimer.current) clearTimeout(rtTimer.current);
+          rtTimer.current = setTimeout(() => reloadCards(id), 350);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (rtTimer.current) clearTimeout(rtTimer.current);
+      supabase.removeChannel(channel);
+    };
+  }, [id, reloadCards]);
+
   async function step(code: string, kind: 'qty' | 'owned', delta: number) {
     const row = cards.find((r) => r.card_code === code);
     if (!row || !deck) return;

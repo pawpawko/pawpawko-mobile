@@ -222,9 +222,37 @@ export default function BinderDetailScreen() {
     return lst;
   }, [id, canEdit]);
 
+  // Keep drag(aesthetics) mode readable inside the Realtime callback closure.
+  const aestheticsModeRef = useRef(aestheticsMode);
+  aestheticsModeRef.current = aestheticsMode;
+  const rtTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // ---- Realtime: a co-editor's card change refreshes this binder live ----
+  // (public.listings is in the Realtime publication.) Skipped during a drag so
+  // it never yanks an in-progress reorder; a silent reload otherwise.
+  useEffect(() => {
+    if (!id) return;
+    const channel = supabase
+      .channel('binder-' + id)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'listings', filter: 'binder_id=eq.' + id },
+        () => {
+          if (aestheticsModeRef.current) return;
+          if (rtTimer.current) clearTimeout(rtTimer.current);
+          rtTimer.current = setTimeout(() => loadAll({ silent: true }), 350);
+        },
+      )
+      .subscribe();
+    return () => {
+      if (rtTimer.current) clearTimeout(rtTimer.current);
+      supabase.removeChannel(channel);
+    };
+  }, [id, loadAll]);
 
   // ---- Sort listings according to active sortMode ----
   const sortedListings = applySortMode(listings, cards, sortMode);

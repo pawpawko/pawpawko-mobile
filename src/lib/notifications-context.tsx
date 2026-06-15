@@ -97,8 +97,24 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       () => {},
     );
     reload();
+    // Instant updates via Realtime (public.notifications is in the publication;
+    // RLS scopes the stream to the caller's own rows). The poll stays as a
+    // fallback if the socket drops.
+    const channel = supabase
+      .channel('notif-' + userId)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notifications', filter: 'user_id=eq.' + userId },
+        () => {
+          reload();
+        },
+      )
+      .subscribe();
     const timer = setInterval(reload, POLL_MS);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      supabase.removeChannel(channel);
+    };
   }, [userId, reload]);
 
   const unread = items.filter((n) => !n.read).length;
