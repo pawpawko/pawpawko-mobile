@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Tabs, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AutoSearchSheet } from '@/components/auto-search-sheet';
 import { useAutoSearch } from '@/lib/auto-search-context';
+import { useNotifications } from '@/lib/notifications-context';
 import { colors, fonts } from '@/lib/theme';
 
 // Visible header chrome (below the status bar) is HEADER_CONTENT_H tall.
@@ -92,6 +93,46 @@ function HeaderJollyButton({ onPress }: { onPress: () => void }) {
   );
 }
 
+// Notifications bell (header-left on every tab) with an unread badge.
+function NotificationBell() {
+  const router = useRouter();
+  const { unread } = useNotifications();
+  return (
+    <Pressable
+      onPress={() => router.push('/notifications')}
+      style={({ pressed }) => ({
+        paddingLeft: 14,
+        paddingRight: 16,
+        paddingVertical: 10,
+        opacity: pressed ? 0.6 : 1,
+      })}
+      accessibilityLabel="Notifications">
+      <View>
+        <Ionicons name="notifications-outline" size={24} color={colors.accent} />
+        {unread > 0 ? (
+          <View
+            style={{
+              position: 'absolute',
+              top: -5,
+              right: -7,
+              minWidth: 16,
+              height: 16,
+              borderRadius: 8,
+              paddingHorizontal: 3,
+              backgroundColor: colors.danger,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+            <Text style={{ color: '#fff', fontSize: 10, fontFamily: fonts.bodyBold }}>
+              {unread > 9 ? '9+' : String(unread)}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
 export default function TabsLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -112,6 +153,8 @@ export default function TabsLayout() {
           headerTitle: () => <HeaderJollyButton onPress={() => setSheetOpen(true)} />,
           headerTitleAlign: 'center',
           headerTitleContainerStyle: { paddingBottom: HEADER_TITLE_PAD_BOTTOM },
+          headerLeft: () => <NotificationBell />,
+          headerLeftContainerStyle: { paddingLeft: 0 },
           headerRightContainerStyle: { paddingRight: 0 },
           tabBarStyle: { backgroundColor: colors.bgSecondary, borderTopColor: colors.border },
           tabBarActiveTintColor: colors.accent,

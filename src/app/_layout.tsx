@@ -8,6 +8,7 @@ import { View, type TextStyle } from 'react-native';
 import { DiceLoader } from '@/components/dice-loader';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AutoSearchProvider } from '@/lib/auto-search-context';
+import { NotificationsProvider } from '@/lib/notifications-context';
 import { colors } from '@/lib/theme';
 
 function AuthGate() {
@@ -78,6 +79,17 @@ function AuthGate() {
       />
       <Stack.Screen name="scan" options={{ presentation: 'modal', animation: 'fade' }} />
       <Stack.Screen
+        name="notifications"
+        options={{
+          presentation: 'modal',
+          headerShown: true,
+          title: 'NOTIFICATIONS',
+          headerStyle: { backgroundColor: colors.bgSecondary },
+          headerTintColor: colors.textPrimary,
+          headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 } as TextStyle,
+        }}
+      />
+      <Stack.Screen
         name="nearby"
         options={{
           presentation: 'modal',
@@ -129,8 +141,10 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <AutoSearchProvider>
-        <StatusBar style="light" />
-        <AuthGate />
+        <NotificationsProvider>
+          <StatusBar style="light" />
+          <AuthGate />
+        </NotificationsProvider>
       </AutoSearchProvider>
     </AuthProvider>
   );
