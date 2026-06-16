@@ -82,6 +82,7 @@ type Listing = {
   quantity: number;
   listing_type: string;
   sort_order: number | null;
+  deck_id?: string | null; // set on deck-synced wishlist rows (owner read only)
 };
 
 type CardInfo = {
@@ -187,7 +188,7 @@ export default function BinderDetailScreen() {
       canEdit
         ? supabase
             .from('listings')
-            .select('id, quantity, listing_type, card_code, sort_order')
+            .select('id, quantity, listing_type, card_code, sort_order, deck_id')
             .eq('binder_id', id)
             .order('sort_order', { ascending: true, nullsFirst: false })
             // Oldest-first among unplaced (null sort_order) cards so freshly
@@ -380,6 +381,44 @@ export default function BinderDetailScreen() {
     }
     setListings((ls) => ls.filter((l) => l.id !== listingId));
     return true;
+  }
+
+  // "Got it" on a wishlist card (owner). Deck-synced rows (deck_id set) add a
+  // copy to the deck as owned — the deck_cards_sync_wishlist trigger then shrinks
+  // this wishlist row. Manual rows just decrement (and delete at zero). Mirrors
+  // the web markReceived/persistReceive flow.
+  async function markReceived(l: Listing) {
+    if (l.deck_id) {
+      const { data: dc } = await supabase
+        .from('deck_cards')
+        .select('quantity, owned')
+        .eq('deck_id', l.deck_id)
+        .eq('card_code', l.card_code)
+        .maybeSingle();
+      if (dc) {
+        const newOwned = Math.min(dc.quantity, (dc.owned ?? 0) + 1);
+        await supabase
+          .from('deck_cards')
+          .update({ owned: newOwned })
+          .eq('deck_id', l.deck_id)
+          .eq('card_code', l.card_code);
+      } else {
+        await supabase.from('listings').delete().eq('id', l.id);
+      }
+    } else {
+      const { data: cur } = await supabase
+        .from('listings')
+        .select('quantity')
+        .eq('id', l.id)
+        .maybeSingle();
+      if (!cur) return;
+      if ((cur.quantity ?? 1) > 1) {
+        await supabase.from('listings').update({ quantity: cur.quantity - 1 }).eq('id', l.id);
+      } else {
+        await supabase.from('listings').delete().eq('id', l.id);
+      }
+    }
+    await loadAll({ silent: true });
   }
 
   async function removeAllForCard(cardCode: string) {
@@ -684,6 +723,14 @@ export default function BinderDetailScreen() {
         cards={cards}
         initialIndex={expandedIdx ?? 0}
         isWishlist={isWishlist}
+        onReceive={
+          isOwner && isWishlist
+            ? (l) => {
+                setExpandedIdx(null);
+                markReceived(l);
+              }
+            : undefined
+        }
       />
     </>
   );
@@ -2185,6 +2232,7 @@ function CardPagerModal({
   cards,
   initialIndex,
   isWishlist,
+  onReceive,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -2192,6 +2240,7 @@ function CardPagerModal({
   cards: Record<string, CardInfo>;
   initialIndex: number;
   isWishlist: boolean;
+  onReceive?: (l: Listing) => void; // owner "Got it" on a wishlist card
 }) {
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [currentIdx, setCurrentIdx] = useState(initialIndex);
@@ -2250,6 +2299,15 @@ function CardPagerModal({
                       <Text style={styles.modalValue}>{item.listing_type}</Text>
                     </View>
                   </>
+                ) : null}
+                {isWishlist && onReceive ? (
+                  <Pressable
+                    style={({ pressed }) => [styles.gotItBtn, pressed && { opacity: 0.85 }]}
+                    onPress={() => onReceive(item)}
+                    accessibilityLabel="Mark as collected">
+                    <Ionicons name="sparkles" size={16} color={colors.bgPrimary} />
+                    <Text style={styles.gotItText}>GOT IT!</Text>
+                  </Pressable>
                 ) : null}
               </View>
             );
@@ -2407,6 +2465,17 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   modalCode: { fontSize: 13, color: colors.accent, fontFamily: fonts.body, letterSpacing: 2 },
+  gotItBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#e0b24d',
+    borderRadius: 999,
+    paddingHorizontal: 22,
+    paddingVertical: 10,
+    marginTop: 18,
+  },
+  gotItText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
   modalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
