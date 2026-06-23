@@ -76,14 +76,21 @@ export default function DeckEditorScreen() {
   // Partner management (owner-only; share_deck validates the named account is
   // your trade-binder co-owner for this game).
   const [partners, setPartners] = useState<{ user_id: string; display_name: string }[]>([]);
+  const [pendingInvite, setPendingInvite] = useState<{ user_id: string; display_name: string } | null>(null);
   const [partnerName, setPartnerName] = useState('');
   const [partnerBusy, setPartnerBusy] = useState(false);
   const [partnerMsg, setPartnerMsg] = useState<string | null>(null);
 
+  // Accepted collaborator(s) plus any still-pending invite, so the UI can show
+  // the invited partner's name (awaiting acceptance) instead of the add form.
   const loadPartners = useCallback(async () => {
     if (!id) return;
-    const { data } = await supabase.rpc('deck_collaborators_list', { p_deck_id: id });
-    setPartners((data as { user_id: string; display_name: string }[]) ?? []);
+    const [{ data: collabs }, { data: pending }] = await Promise.all([
+      supabase.rpc('deck_collaborators_list', { p_deck_id: id }),
+      supabase.rpc('deck_pending_invite', { p_deck_id: id }),
+    ]);
+    setPartners((collabs as { user_id: string; display_name: string }[]) ?? []);
+    setPendingInvite(((pending as { user_id: string; display_name: string }[]) ?? [])[0] ?? null);
   }, [id]);
 
   const reloadCards = useCallback(
@@ -149,6 +156,23 @@ export default function DeckEditorScreen() {
     if (deck && isOwner) loadPartners();
   }, [deck, isOwner, loadPartners]);
 
+  // Prefill the invite box with your trade-binder partner for this game — the
+  // only account a deck can be shared with. Editable; user still taps Invite.
+  // Never clobbers text the user has already typed.
+  useEffect(() => {
+    if (!deck || !isOwner || !id) return;
+    if (partners.length || pendingInvite) return; // already shared / pending
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.rpc('deck_trade_partner', { p_deck_id: id });
+      const tp = ((data as { user_id: string; display_name: string }[]) ?? [])[0];
+      if (!cancelled && tp?.display_name) setPartnerName((cur) => cur || tp.display_name);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deck, isOwner, id, partners.length, pendingInvite]);
+
   async function invitePartner() {
     const nm = partnerName.trim();
     if (!nm) return;
@@ -167,6 +191,19 @@ export default function DeckEditorScreen() {
 
   async function removePartner(uid: string) {
     const { error } = await supabase.rpc('unshare_deck', { p_deck_id: id, p_user_id: uid });
+    if (error) {
+      setPartnerMsg(error.message);
+      return;
+    }
+    loadPartners();
+  }
+
+  // Cancel a still-pending invite (before the partner accepts).
+  async function rescindInvite() {
+    setPartnerBusy(true);
+    setPartnerMsg(null);
+    const { error } = await supabase.rpc('rescind_deck_invite', { p_deck_id: id });
+    setPartnerBusy(false);
     if (error) {
       setPartnerMsg(error.message);
       return;
@@ -446,6 +483,21 @@ export default function DeckEditorScreen() {
                   </Pressable>
                 </View>
               ))
+            ) : pendingInvite ? (
+              <View style={styles.partnerChip}>
+                <View style={styles.partnerPendingRow}>
+                  <Text style={styles.partnerChipName}>
+                    {pendingInvite.display_name || 'partner'}
+                  </Text>
+                  <Text style={styles.partnerPending}>pending</Text>
+                </View>
+                <Pressable
+                  onPress={rescindInvite}
+                  hitSlop={8}
+                  accessibilityLabel="Cancel invite">
+                  <Ionicons name="close" size={16} color={colors.textMuted} />
+                </Pressable>
+              </View>
             ) : (
               <View style={styles.partnerRow}>
                 <TextInput
@@ -759,6 +811,13 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   partnerChipName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+  partnerPendingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  partnerPending: {
+    color: colors.textMuted,
+    fontFamily: fonts.body,
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
   partnerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   partnerInput: {
     flex: 1,

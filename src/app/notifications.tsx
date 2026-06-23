@@ -3,12 +3,15 @@ import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, type ReactNode } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, type TextStyle, View } from 'react-native';
 
+import { useAuth } from '@/lib/auth';
 import { useNotifications, type AppNotification } from '@/lib/notifications-context';
+import { supabase } from '@/lib/supabase';
 import { colors, fonts } from '@/lib/theme';
 
 export default function NotificationsScreen() {
   const router = useRouter();
   const { items, reload, markAllRead, dismiss, respond } = useNotifications();
+  const { session } = useAuth();
 
   // Opening the screen marks everything read (clears the bell badge), mirroring
   // the web dropdown behaviour.
@@ -37,9 +40,46 @@ export default function NotificationsScreen() {
       );
       return;
     }
+    if (kind === 'deck' && accept) {
+      acceptDeck(n);
+      return;
+    }
     respond(n.id, accept, kind).then((err) => {
       if (err) Alert.alert('Something went wrong', err);
     });
+  };
+
+  // Accepting a deck invite REPLACES the recipient's own deck for this leader
+  // (the server deletes it). Warn first when such a deck actually exists.
+  const acceptDeck = async (n: AppNotification) => {
+    const d = n.data || {};
+    const doAccept = async () => {
+      const err = await respond(n.id, true, 'deck');
+      if (err) Alert.alert('Could not accept', err);
+    };
+    const uid = session?.user.id;
+    if (uid && d.leader_card_code && d.game) {
+      const { data } = await supabase
+        .from('decks')
+        .select('id,name')
+        .eq('user_id', uid)
+        .eq('game', d.game)
+        .eq('leader_card_code', d.leader_card_code)
+        .limit(1);
+      const mine = (data as { id: string; name: string }[] | null)?.[0];
+      if (mine && mine.id !== d.deck_id) {
+        Alert.alert(
+          'Replace your own deck?',
+          `Accepting permanently deletes your own deck "${mine.name}" for this leader — you'll co-edit "${d.deck_name}" instead.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Replace', style: 'destructive', onPress: doAccept },
+          ],
+        );
+        return;
+      }
+    }
+    doAccept();
   };
 
   const openDeck = (deckId?: string) => {
