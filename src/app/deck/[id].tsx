@@ -42,6 +42,16 @@ const GRID_COLS = 5;
 const GRID_GAP = 8;
 const SCROLL_PAD = 16;
 
+type PriceRow = {
+  code: string;
+  name: string;
+  rarity: string;
+  img: string | null;
+  need: number;
+  price: number | null;
+  line: number | null;
+};
+
 export default function DeckEditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -80,6 +90,107 @@ export default function DeckEditorScreen() {
   const [partnerName, setPartnerName] = useState('');
   const [partnerBusy, setPartnerBusy] = useState(false);
   const [partnerMsg, setPartnerMsg] = useState<string | null>(null);
+
+  // Cost to Finish (missing copies) / Cost of Deck (whole deck) — each card at
+  // its cached cheapest single price (cards.price_usd, kept fresh by the weekly
+  // update_prices cron). Mirrors the web js/decks.js price breakdown.
+  const [priceOpen, setPriceOpen] = useState(false);
+  const [priceMode, setPriceMode] = useState<'finish' | 'deck'>('finish');
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [priceRows, setPriceRows] = useState<PriceRow[]>([]);
+  const [priceTotal, setPriceTotal] = useState(0);
+  const [priceCopies, setPriceCopies] = useState(0);
+  const [priceFoot, setPriceFoot] = useState('');
+  const [priceErr, setPriceErr] = useState<string | null>(null);
+
+  async function openPrices(mode: 'finish' | 'deck') {
+    if (!deck) return;
+    setPriceMode(mode);
+    setPriceOpen(true);
+    setPriceLoading(true);
+    setPriceErr(null);
+    setPriceRows([]);
+    setPriceTotal(0);
+    setPriceCopies(0);
+    setPriceFoot('');
+
+    // Deck = leader + every card at full quantity; Finish = only the copies short.
+    const items =
+      mode === 'deck'
+        ? [{ code: deck.leader_card_code, need: 1 }, ...cards.map((r) => ({ code: r.card_code, need: r.quantity }))]
+        : cards.map((r) => ({ code: r.card_code, need: r.quantity - r.owned })).filter((x) => x.need > 0);
+
+    if (!items.length) {
+      setPriceLoading(false);
+      setPriceFoot(
+        mode === 'deck'
+          ? 'This deck has no cards yet.'
+          : 'Nothing missing — every card in this deck is owned. 🎉',
+      );
+      return;
+    }
+
+    const codes = items.map((x) => x.code);
+    const priceMap: Record<
+      string,
+      { name?: string; rarity?: string; image_url?: string | null; price_usd?: number | null; price_updated_at?: string | null }
+    > = {};
+    for (let i = 0; i < codes.length; i += 100) {
+      const { data, error } = await supabase
+        .from('cards')
+        .select('card_code,name,rarity,image_url,price_usd,price_updated_at')
+        .eq('game', GAME)
+        .in('card_code', codes.slice(i, i + 100));
+      if (error) {
+        setPriceErr(error.message);
+        setPriceLoading(false);
+        return;
+      }
+      (data ?? []).forEach((c: any) => {
+        priceMap[c.card_code] = c;
+      });
+    }
+
+    let total = 0;
+    let unpriced = 0;
+    let lastUpdated: string | null = null;
+    const rows: PriceRow[] = items
+      .map((x) => {
+        const c = priceMap[x.code] ?? {};
+        const fb = info[x.code] ?? ({} as CardInfo);
+        const price = c.price_usd != null ? Number(c.price_usd) : null;
+        if (price == null) unpriced++;
+        else total += price * x.need;
+        if (c.price_updated_at && (!lastUpdated || c.price_updated_at > lastUpdated)) lastUpdated = c.price_updated_at;
+        return {
+          code: x.code,
+          name: c.name || fb.name || x.code,
+          rarity: c.rarity || '',
+          img: c.image_url || fb.image_url || null,
+          need: x.need,
+          price,
+          line: price == null ? null : price * x.need,
+        };
+      })
+      .sort((a, b) => (b.line ?? -1) - (a.line ?? -1)); // dearest first (cost drivers on top)
+
+    const copies = rows.reduce((s, r) => s + r.need, 0);
+    let foot: string;
+    if (total === 0 && unpriced === rows.length) {
+      foot = 'No prices loaded yet.';
+    } else {
+      const parts = ['Cheapest single · TCGplayer via Limitless'];
+      if (lastUpdated) parts.push('updated ' + new Date(lastUpdated).toLocaleDateString());
+      if (unpriced) parts.push(`${unpriced} card${unpriced === 1 ? '' : 's'} not priced yet`);
+      foot = parts.join(' · ');
+    }
+
+    setPriceRows(rows);
+    setPriceTotal(total);
+    setPriceCopies(copies);
+    setPriceFoot(foot);
+    setPriceLoading(false);
+  }
 
   // Accepted collaborator(s) plus any still-pending invite, so the UI can show
   // the invited partner's name (awaiting acceptance) instead of the add form.
@@ -430,6 +541,10 @@ export default function DeckEditorScreen() {
               <Pressable onPress={() => {}} style={styles.statsBtn} accessibilityLabel="Deck stats">
                 <Ionicons name="stats-chart-outline" size={18} color={colors.textSecondary} />
               </Pressable>
+              {/* Cost to Finish — price of the cards still needed */}
+              <Pressable onPress={() => openPrices('finish')} style={styles.statsBtn} accessibilityLabel="Cost to finish">
+                <Ionicons name="cash-outline" size={18} color={colors.textSecondary} />
+              </Pressable>
             </View>
           </View>
         </View>
@@ -595,6 +710,62 @@ export default function DeckEditorScreen() {
         cards={cards}
         onAdd={addCard}
       />
+
+      <Modal visible={priceOpen} animationType="slide" onRequestClose={() => setPriceOpen(false)}>
+        <View style={styles.priceModal}>
+          <View style={styles.addHeader}>
+            <Text style={styles.addTitle}>{priceMode === 'deck' ? 'Cost of Deck' : 'Cost to Finish'}</Text>
+            <Pressable onPress={() => setPriceOpen(false)} style={{ padding: 6 }}>
+              <Ionicons name="close" size={26} color={colors.textPrimary} />
+            </Pressable>
+          </View>
+          <View style={styles.priceToggle}>
+            {(['finish', 'deck'] as const).map((m) => (
+              <Pressable key={m} onPress={() => openPrices(m)} style={[styles.pill, priceMode === m && styles.pillActive]}>
+                <Text style={[styles.pillText, priceMode === m && styles.pillTextActive]}>
+                  {m === 'finish' ? 'Cards I need' : 'Whole deck'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          {priceLoading ? (
+            <ActivityIndicator color={colors.accent} style={{ marginTop: 24 }} />
+          ) : priceErr ? (
+            <Text style={styles.priceErr}>Couldn’t load prices: {priceErr}</Text>
+          ) : priceRows.length === 0 ? (
+            <Text style={styles.priceEmpty}>{priceFoot}</Text>
+          ) : (
+            <>
+              <Text style={styles.priceTotal}>
+                Total ≈ ${priceTotal.toFixed(2)}{' '}
+                <Text style={styles.priceTotalSub}>
+                  for {priceCopies} card{priceCopies === 1 ? '' : 's'}
+                </Text>
+              </Text>
+              <ScrollView contentContainerStyle={{ paddingBottom: 32 }}>
+                {priceRows.map((r) => (
+                  <View key={r.code} style={[styles.priceRow, r.price == null && { opacity: 0.5 }]}>
+                    <Image source={{ uri: r.img ?? undefined }} style={styles.priceImg} contentFit="cover" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.priceName} numberOfLines={1}>
+                        {r.name}
+                      </Text>
+                      <Text style={styles.priceCode}>
+                        {r.code}
+                        {r.rarity ? ` · ${r.rarity}` : ''}
+                      </Text>
+                    </View>
+                    <Text style={styles.priceNeed}>×{r.need}</Text>
+                    <Text style={styles.priceEach}>{r.price == null ? '—' : `$${r.price.toFixed(2)}`}</Text>
+                    <Text style={styles.priceLine}>{r.line == null ? '—' : `$${r.line.toFixed(2)}`}</Text>
+                  </View>
+                ))}
+                <Text style={styles.priceFoot}>{priceFoot}</Text>
+              </ScrollView>
+            </>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -756,7 +927,7 @@ const styles = StyleSheet.create({
   problems: { marginTop: 8 },
   problem: { color: '#d98a8a', fontFamily: fonts.body, fontSize: 12, lineHeight: 18 },
 
-  actionRow: { flexDirection: 'row', gap: 8 },
+  actionRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
   eyeBtn: {
     width: 44,
     alignItems: 'center',
@@ -785,6 +956,29 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 8,
   },
+
+  // Cost to Finish / Cost of Deck modal
+  priceModal: { flex: 1, backgroundColor: colors.bgPrimary, padding: 16 },
+  priceToggle: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  priceTotal: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 18, marginBottom: 10 },
+  priceTotalSub: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12 },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  priceImg: { width: 30, height: 42, borderRadius: 4, backgroundColor: colors.bgCard },
+  priceName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13 },
+  priceCode: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11 },
+  priceNeed: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, width: 34, textAlign: 'right' },
+  priceEach: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, width: 56, textAlign: 'right' },
+  priceLine: { color: colors.textPrimary, fontFamily: fonts.bodyBold, fontSize: 13, width: 64, textAlign: 'right' },
+  priceFoot: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11, marginTop: 14, lineHeight: 16 },
+  priceErr: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 20 },
+  priceEmpty: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 14, marginTop: 24, textAlign: 'center' },
 
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 8 },
 
