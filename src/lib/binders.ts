@@ -76,3 +76,43 @@ export async function addCardToBinder(
   }
   return 'added';
 }
+
+export type BulkAddSummary = { added: number; duplicates: number; error: boolean };
+
+/** Bulk-add many cards to a binder as trade listings in a single insert. Cards
+ *  already in the binder are skipped (counted as duplicates). Used by the
+ *  multi-scan tray. Expects de-duplicated items (merge quantities upstream). */
+export async function addCardsToBinder(
+  binderId: string,
+  items: { cardCode: string; quantity: number }[],
+): Promise<BulkAddSummary> {
+  if (items.length === 0) return { added: 0, duplicates: 0, error: false };
+  const codes = items.map((i) => i.cardCode);
+  const { data: existing, error: exErr } = await supabase
+    .from('listings')
+    .select('card_code')
+    .eq('binder_id', binderId)
+    .in('card_code', codes);
+  if (exErr) {
+    console.warn('addCardsToBinder existing', exErr.message);
+    return { added: 0, duplicates: 0, error: true };
+  }
+  const have = new Set((existing ?? []).map((r) => r.card_code as string));
+  const toInsert = items.filter((i) => !have.has(i.cardCode));
+  const duplicates = items.length - toInsert.length;
+  if (toInsert.length === 0) return { added: 0, duplicates, error: false };
+
+  const { error: insErr } = await supabase.from('listings').insert(
+    toInsert.map((i) => ({
+      binder_id: binderId,
+      card_code: i.cardCode,
+      quantity: Math.max(1, i.quantity),
+      listing_type: 'trade',
+    })),
+  );
+  if (insErr) {
+    console.warn('addCardsToBinder insert', insErr.message);
+    return { added: 0, duplicates, error: true };
+  }
+  return { added: toInsert.length, duplicates, error: false };
+}

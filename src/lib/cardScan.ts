@@ -92,3 +92,41 @@ export async function scanForCard(ocrText: string): Promise<ScanOutcome> {
   }
   return { card: null, codes };
 }
+
+/** Batch lookup: resolve many codes in a single query. */
+export async function lookupCards(codes: string[]): Promise<ScannedCard[]> {
+  if (codes.length === 0) return [];
+  const { data, error } = await supabase
+    .from('cards')
+    .select('card_code,name,image_url,type,color,cost')
+    .eq('game', 'optcg')
+    .in('card_code', codes);
+  if (error) {
+    console.warn('cardScan lookupCards', error.message);
+    return [];
+  }
+  return (data ?? []) as ScannedCard[];
+}
+
+export type MultiScanOutcome = {
+  /** Matched cards, in OCR read order, de-duplicated by code. */
+  cards: ScannedCard[];
+  /** Codes we read but couldn't resolve to a card. */
+  unmatched: string[];
+};
+
+/** Extract every code from an OCR blob (e.g. a whole binder page) and resolve
+ *  all that match a card — the multi-scan counterpart to scanForCard. */
+export async function scanForCards(ocrText: string): Promise<MultiScanOutcome> {
+  const codes = extractCardCodes(ocrText);
+  const found = await lookupCards(codes);
+  const byCode = new Map(found.map((c) => [c.card_code, c]));
+  const cards: ScannedCard[] = [];
+  const unmatched: string[] = [];
+  for (const code of codes) {
+    const c = byCode.get(code);
+    if (c) cards.push(c);
+    else unmatched.push(code);
+  }
+  return { cards, unmatched };
+}

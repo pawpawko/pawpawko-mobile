@@ -3,12 +3,30 @@ import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/lib/auth';
-import { addCardToBinder, createTradeBinder, listTradeBinders, type TradeBinder } from '@/lib/binders';
-import { scanForCard, type ScannedCard } from '@/lib/cardScan';
+import {
+  addCardsToBinder,
+  addCardToBinder,
+  createTradeBinder,
+  listTradeBinders,
+  type TradeBinder,
+} from '@/lib/binders';
+import { lookupCards, normalizeCode, scanForCard, scanForCards, type ScannedCard } from '@/lib/cardScan';
 import { suffixFromSlug } from '@/lib/slug';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
@@ -18,7 +36,7 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const SLUG_RE = /\/binders\/([a-z0-9-]+)/i;
 const TRADE_TAP_RE = /pawpawko:\/\/trade-tap\?u=([0-9a-f-]{36})/i;
 
-type Mode = 'qr' | 'card';
+type Mode = 'qr' | 'card' | 'page';
 
 type ScanResult =
   | { kind: 'binder'; binderId: string }
@@ -66,6 +84,12 @@ export default function ScanScreen() {
   const [tradeBinders, setTradeBinders] = useState<TradeBinder[] | null>(null);
   const [bindersBusy, setBindersBusy] = useState(false);
   const [qty, setQty] = useState(1);
+  const [pickerMode, setPickerMode] = useState<'single' | 'tray'>('single');
+  // Multi-scan tray (page mode): a running list of detected cards to commit
+  // together. Merged by card_code; quantity bumps on repeat detections.
+  const [tray, setTray] = useState<{ card: ScannedCard; quantity: number }[]>([]);
+  const [trayOpen, setTrayOpen] = useState(false);
+  const [manualCode, setManualCode] = useState('');
 
   if (!permission) {
     return (
@@ -145,6 +169,79 @@ export default function ScanScreen() {
     }
   }
 
+  // ---- Page mode (capture a whole page → OCR → drop every match into the tray) ----
+  async function capturePage() {
+    if (busy || !cameraRef.current) return;
+    setBusy(true);
+    setNoMatch(null);
+    setAddMsg(null);
+    try {
+      // Full resolution: a page's card numbers are tiny, so don't downsample.
+      const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
+      if (!photo?.uri) {
+        setNoMatch('Could not capture — try again');
+        return;
+      }
+      const ocr = await TextRecognition.recognize(photo.uri);
+      const { cards, unmatched } = await scanForCards(ocr.text);
+      if (cards.length === 0) {
+        setNoMatch(
+          unmatched.length
+            ? `Read ${unmatched.length} number${unmatched.length === 1 ? '' : 's'} but matched none`
+            : 'No card numbers found — fill the frame, good light',
+        );
+        return;
+      }
+      mergeIntoTray(cards);
+      setNoMatch(
+        `Added ${cards.length} card${cards.length === 1 ? '' : 's'} to tray` +
+          (unmatched.length ? ` · ${unmatched.length} unreadable` : ''),
+      );
+    } catch {
+      setNoMatch('Scan failed — try again');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Merge detected cards into the tray, de-duping by code and bumping quantity
+  // on repeats (so the same card across pages counts as multiple copies).
+  function mergeIntoTray(cards: ScannedCard[]) {
+    setTray((prev) => {
+      const map = new Map(prev.map((t) => [t.card.card_code, t]));
+      for (const c of cards) {
+        const ex = map.get(c.card_code);
+        if (ex) map.set(c.card_code, { ...ex, quantity: ex.quantity + 1 });
+        else map.set(c.card_code, { card: c, quantity: 1 });
+      }
+      return Array.from(map.values());
+    });
+  }
+
+  function setTrayQty(cardCode: string, next: number) {
+    setTray((prev) =>
+      prev.flatMap((t) =>
+        t.card.card_code === cardCode ? (next > 0 ? [{ ...t, quantity: next }] : []) : [t],
+      ),
+    );
+  }
+
+  // Manual fallback for a card the camera couldn't read.
+  async function addManualCode() {
+    const code = normalizeCode(manualCode);
+    if (!code) {
+      setNoMatch('Not a One Piece card number (e.g. OP10-019)');
+      return;
+    }
+    const [card] = await lookupCards([code]);
+    if (!card) {
+      setNoMatch(`No match for ${code}`);
+      return;
+    }
+    mergeIntoTray([card]);
+    setManualCode('');
+  }
+
   async function addScannedToWishlist() {
     if (!scanned || !userId) return;
     const res = await addCardToWishlist(scanned.card_code, 'optcg', userId);
@@ -157,25 +254,53 @@ export default function ScanScreen() {
     );
   }
 
-  // Open the trade-binder picker, loading the user's One Piece trade binders
-  // once (cached for the session).
-  async function openTradePicker() {
+  // Load the user's One Piece trade binders once (cached for the session).
+  async function ensureBindersLoaded() {
+    if (!userId || tradeBinders !== null) return;
+    setBindersBusy(true);
+    const list = await listTradeBinders(userId, 'optcg');
+    setTradeBinders(list);
+    setBindersBusy(false);
+  }
+
+  // Open the picker for the single scanned card.
+  function openTradePicker() {
     if (!userId) return;
+    setPickerMode('single');
     setAddMsg(null);
     setPickerOpen(true);
-    if (tradeBinders === null) {
-      setBindersBusy(true);
-      const list = await listTradeBinders(userId, 'optcg');
-      setTradeBinders(list);
-      setBindersBusy(false);
-    }
+    void ensureBindersLoaded();
+  }
+
+  // Open the picker to commit the whole multi-scan tray at once.
+  function openTrayPicker() {
+    if (!userId || tray.length === 0) return;
+    setPickerMode('tray');
+    setTrayOpen(false);
+    setPickerOpen(true);
+    void ensureBindersLoaded();
   }
 
   async function addToBinder(target: TradeBinder) {
+    const name = target.name || 'trade binder';
+    if (pickerMode === 'tray') {
+      const items = tray.map((t) => ({ cardCode: t.card.card_code, quantity: t.quantity }));
+      const sum = await addCardsToBinder(target.id, items);
+      setPickerOpen(false);
+      if (sum.error) {
+        setAddMsg('Could not add — try again');
+        return;
+      }
+      setTray([]);
+      setAddMsg(
+        `Added ${sum.added} to ${name}` +
+          (sum.duplicates ? ` · ${sum.duplicates} already there` : ''),
+      );
+      return;
+    }
     if (!scanned) return;
     const res = await addCardToBinder(target.id, scanned.card_code, qty);
     setPickerOpen(false);
-    const name = target.name || 'trade binder';
     setAddMsg(
       res === 'duplicate'
         ? `Already in ${name}`
@@ -186,7 +311,8 @@ export default function ScanScreen() {
   }
 
   async function createAndAddToBinder() {
-    if (!userId || !scanned) return;
+    if (!userId) return;
+    if (pickerMode === 'single' && !scanned) return;
     setBindersBusy(true);
     const nb = await createTradeBinder(userId, 'optcg');
     setBindersBusy(false);
@@ -235,13 +361,13 @@ export default function ScanScreen() {
           </View>
 
           <View style={styles.modeRow}>
-            {(['qr', 'card'] as Mode[]).map((m) => (
+            {(['qr', 'card', 'page'] as Mode[]).map((m) => (
               <Pressable
                 key={m}
                 onPress={() => switchMode(m)}
                 style={[styles.modePill, mode === m && styles.modePillActive]}>
                 <Text style={[styles.modePillText, mode === m && styles.modePillTextActive]}>
-                  {m === 'qr' ? 'QR' : 'CARD'}
+                  {m === 'qr' ? 'QR' : m === 'card' ? 'CARD' : 'PAGE'}
                 </Text>
               </Pressable>
             ))}
@@ -250,7 +376,7 @@ export default function ScanScreen() {
 
         {/* Aim guide */}
         <View style={styles.aimWrap} pointerEvents="none">
-          <View style={mode === 'qr' ? styles.aimBox : styles.cardBox}>
+          <View style={mode === 'qr' ? styles.aimBox : mode === 'card' ? styles.cardBox : styles.pageBox}>
             <View style={[styles.corner, styles.cornerTL]} />
             <View style={[styles.corner, styles.cornerTR]} />
             <View style={[styles.corner, styles.cornerBL]} />
@@ -259,7 +385,9 @@ export default function ScanScreen() {
           <Text style={styles.hint}>
             {mode === 'qr'
               ? 'Point at a Pawpaw Ko binder QR or Trade Tap code'
-              : 'Fill the frame with a One Piece card, then tap to scan'}
+              : mode === 'card'
+                ? 'Fill the frame with a One Piece card, then tap to scan'
+                : 'Fit a binder page in the frame, then tap — cards drop into the tray'}
           </Text>
         </View>
 
@@ -274,12 +402,23 @@ export default function ScanScreen() {
               <View style={{ height: 60 }} />
             )
           ) : (
-            <Pressable
-              style={[styles.shutter, busy && styles.shutterBusy]}
-              onPress={captureCard}
-              disabled={busy}>
-              {busy ? <ActivityIndicator color={colors.bgPrimary} /> : <View style={styles.shutterInner} />}
-            </Pressable>
+            <View style={styles.shutterRow}>
+              {mode === 'page' && tray.length > 0 ? (
+                <Pressable style={styles.trayBtn} onPress={() => setTrayOpen(true)}>
+                  <Ionicons name="albums" size={18} color={colors.bgPrimary} />
+                  <Text style={styles.trayBtnText}>{tray.length}</Text>
+                </Pressable>
+              ) : (
+                <View style={styles.trayBtnSpacer} />
+              )}
+              <Pressable
+                style={[styles.shutter, busy && styles.shutterBusy]}
+                onPress={mode === 'card' ? captureCard : capturePage}
+                disabled={busy}>
+                {busy ? <ActivityIndicator color={colors.bgPrimary} /> : <View style={styles.shutterInner} />}
+              </Pressable>
+              <View style={styles.trayBtnSpacer} />
+            </View>
           )}
         </View>
       </SafeAreaView>
@@ -326,20 +465,24 @@ export default function ScanScreen() {
       {pickerOpen ? (
         <View style={styles.resultWrap}>
           <View style={styles.resultCard}>
-            <Text style={styles.pickerTitle}>ADD TO TRADE BINDER</Text>
+            <Text style={styles.pickerTitle}>
+              {pickerMode === 'tray' ? `ADD ${tray.length} CARDS TO…` : 'ADD TO TRADE BINDER'}
+            </Text>
 
-            <View style={styles.qtyRow}>
-              <Text style={styles.qtyLabel}>Quantity</Text>
-              <View style={styles.qtyControls}>
-                <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.max(1, q - 1))}>
-                  <Ionicons name="remove" size={18} color={colors.accent} />
-                </Pressable>
-                <Text style={styles.qtyValue}>{qty}</Text>
-                <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.min(99, q + 1))}>
-                  <Ionicons name="add" size={18} color={colors.accent} />
-                </Pressable>
+            {pickerMode === 'single' ? (
+              <View style={styles.qtyRow}>
+                <Text style={styles.qtyLabel}>Quantity</Text>
+                <View style={styles.qtyControls}>
+                  <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.max(1, q - 1))}>
+                    <Ionicons name="remove" size={18} color={colors.accent} />
+                  </Pressable>
+                  <Text style={styles.qtyValue}>{qty}</Text>
+                  <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.min(99, q + 1))}>
+                    <Ionicons name="add" size={18} color={colors.accent} />
+                  </Pressable>
+                </View>
               </View>
-            </View>
+            ) : null}
 
             {bindersBusy ? (
               <ActivityIndicator color={colors.accent} style={{ marginVertical: 14 }} />
@@ -376,6 +519,90 @@ export default function ScanScreen() {
           </View>
         </View>
       ) : null}
+
+      {/* Multi-scan review tray */}
+      <Modal visible={trayOpen} transparent animationType="slide" onRequestClose={() => setTrayOpen(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.trayBackdrop}>
+          <View style={styles.traySheet}>
+            <View style={styles.trayHeader}>
+              <Text style={styles.trayTitle}>SCAN TRAY · {tray.length}</Text>
+              <Pressable onPress={() => setTrayOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={24} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+
+            {tray.length === 0 ? (
+              <Text style={styles.trayEmpty}>No cards yet — scan a page or add a code below.</Text>
+            ) : (
+              <ScrollView style={styles.trayList} keyboardShouldPersistTaps="handled">
+                {tray.map((t) => (
+                  <View key={t.card.card_code} style={styles.trayItem}>
+                    {t.card.image_url ? (
+                      <Image source={{ uri: t.card.image_url }} style={styles.trayThumb} resizeMode="contain" />
+                    ) : (
+                      <View style={styles.trayThumb} />
+                    )}
+                    <View style={styles.trayItemInfo}>
+                      <Text style={styles.trayItemName} numberOfLines={1}>
+                        {t.card.name}
+                      </Text>
+                      <Text style={styles.trayItemCode}>{t.card.card_code}</Text>
+                    </View>
+                    <View style={styles.qtyControls}>
+                      <Pressable
+                        style={styles.qtyBtn}
+                        onPress={() => setTrayQty(t.card.card_code, t.quantity - 1)}>
+                        <Ionicons name="remove" size={16} color={colors.accent} />
+                      </Pressable>
+                      <Text style={styles.qtyValue}>{t.quantity}</Text>
+                      <Pressable
+                        style={styles.qtyBtn}
+                        onPress={() => setTrayQty(t.card.card_code, t.quantity + 1)}>
+                        <Ionicons name="add" size={16} color={colors.accent} />
+                      </Pressable>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+
+            <View style={styles.manualRow}>
+              <TextInput
+                value={manualCode}
+                onChangeText={setManualCode}
+                placeholder="Add a code the camera missed (OP10-019)"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                style={styles.manualInput}
+                onSubmitEditing={addManualCode}
+                returnKeyType="done"
+              />
+              <Pressable style={styles.manualBtn} onPress={addManualCode}>
+                <Ionicons name="add" size={20} color={colors.bgPrimary} />
+              </Pressable>
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryBtn,
+                tray.length === 0 && styles.disabledBtn,
+                pressed && styles.btnPressed,
+              ]}
+              onPress={openTrayPicker}
+              disabled={tray.length === 0}>
+              <Text style={styles.primaryBtnText}>ADD {tray.length} TO TRADE BINDER</Text>
+            </Pressable>
+            {tray.length > 0 ? (
+              <Pressable style={styles.ghostBtn} onPress={() => setTray([])}>
+                <Text style={styles.ghostBtnText}>Clear tray</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -502,6 +729,28 @@ const styles = StyleSheet.create({
   binderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
   binderRowText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15, flex: 1 },
   pickerHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, textAlign: 'center', marginTop: 4 },
+
+  pageBox: { width: 300, height: 380, position: 'relative' },
+  shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
+  trayBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.accent, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.lg },
+  trayBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 15 },
+  trayBtnSpacer: { width: 58 },
+
+  trayBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  traySheet: { backgroundColor: colors.bgPrimary, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: 16, paddingBottom: 28, maxHeight: '85%' },
+  trayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  trayTitle: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 15 },
+  trayEmpty: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 14, textAlign: 'center', paddingVertical: 24 },
+  trayList: { maxHeight: 360 },
+  trayItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderColor: colors.border },
+  trayThumb: { width: 38, height: 53, borderRadius: 4, backgroundColor: colors.bgCard },
+  trayItemInfo: { flex: 1 },
+  trayItemName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+  trayItemCode: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, letterSpacing: 0.5 },
+  manualRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  manualInput: { flex: 1, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgCard, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 10, color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+  manualBtn: { width: 44, height: 44, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  disabledBtn: { opacity: 0.5 },
   ghostBtn: { marginTop: 4, padding: 10 },
   ghostBtnText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 14 },
 });
