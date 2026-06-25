@@ -133,6 +133,10 @@ export default function BinderDetailScreen() {
 
   // Existing
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  // Deck-origin enrichment for owner wishlist binders: deck_id → deck name.
+  const [decksById, setDecksById] = useState<Record<string, { id: string; name: string | null }>>({});
+  const [deckFilter, setDeckFilter] = useState(''); // '' | '__deck__' | '__manual__' | <deckId>
+
   const [shareOpen, setShareOpen] = useState(false);
 
   const shareUrl = id && header ? binderShareUrl(header.display_name, header.binder_name, id) : '';
@@ -232,6 +236,35 @@ export default function BinderDetailScreen() {
     loadAll();
   }, [loadAll]);
 
+  // Deck-origin lookup (owner + wishlist only): the auto wishlist-sync stamps
+  // deck-sourced rows with listings.deck_id; map those ids → deck names so the
+  // tile/detail can show a 🃏 pill and the "For deck" filter can list them.
+  // Owner-only — anon viewers never receive deck_id (the public RPC omits it).
+  useEffect(() => {
+    if (!isOwner || header?.flair !== 'wishlist') {
+      setDecksById({});
+      return;
+    }
+    const deckIds = [...new Set(listings.map((l) => l.deck_id).filter(Boolean))] as string[];
+    if (!deckIds.length) {
+      setDecksById({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from('decks').select('id, name').in('id', deckIds);
+      if (cancelled) return;
+      const m: Record<string, { id: string; name: string | null }> = {};
+      (data ?? []).forEach((d: any) => {
+        m[d.id] = d;
+      });
+      setDecksById(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [listings, isOwner, header?.flair]);
+
   // ---- Realtime: a co-editor's card change refreshes this binder live ----
   // (public.listings is in the Realtime publication.) Skipped during a drag so
   // it never yanks an in-progress reorder; a silent reload otherwise.
@@ -257,6 +290,30 @@ export default function BinderDetailScreen() {
 
   // ---- Sort listings according to active sortMode ----
   const sortedListings = applySortMode(listings, cards, sortMode);
+
+  // "For deck" filter (owner wishlist): the decks present among deck-synced rows.
+  const deckPillOptions = useMemo(
+    () =>
+      ([...new Set(listings.map((l) => l.deck_id).filter(Boolean))] as string[])
+        .filter((did) => decksById[did])
+        .map((did) => ({ id: did, name: decksById[did].name || 'Deck' }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [listings, decksById],
+  );
+  // Drop a stale per-deck selection if that deck is no longer present.
+  const effDeckFilter =
+    deckFilter && deckFilter !== '__deck__' && deckFilter !== '__manual__' && !decksById[deckFilter]
+      ? ''
+      : deckFilter;
+  // Edit/reorder always sees the full set; browse honors the deck filter.
+  const displayListings =
+    editMode || !effDeckFilter
+      ? sortedListings
+      : sortedListings.filter((l) => {
+          if (effDeckFilter === '__deck__') return !!l.deck_id;
+          if (effDeckFilter === '__manual__') return !l.deck_id;
+          return l.deck_id === effDeckFilter;
+        });
 
   // Reset page if it overflows the new total
   useEffect(() => {
@@ -463,10 +520,10 @@ export default function BinderDetailScreen() {
   const sortOptions = header.category === 'pokemon' ? SORT_MODES_POKEMON : SORT_MODES_OPTCG;
   const numColumns = layout === '3x3' ? 3 : 4;
   const isWishlist = header.flair === 'wishlist';
-  const total = sortedListings.length;
+  const total = displayListings.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = (currentPage - 1) * pageSize;
-  const pageItems = sortedListings.slice(pageStart, pageStart + pageSize);
+  const pageItems = displayListings.slice(pageStart, pageStart + pageSize);
 
   const showDraggable = editMode && aestheticsMode && (sortMode === 'custom-3x3' || sortMode === 'custom-4x3');
 
@@ -547,9 +604,42 @@ export default function BinderDetailScreen() {
           />
         ) : null}
 
+        {!editMode && isOwner && isWishlist && deckPillOptions.length > 0 ? (
+          <View style={styles.deckFilterBar}>
+            <Text style={styles.deckFilterLabel}>For deck</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.deckFilterPills}>
+              {[
+                { id: '', label: 'All' },
+                { id: '__deck__', label: 'Deck cards' },
+                { id: '__manual__', label: 'Manual' },
+                ...deckPillOptions.map((d) => ({ id: d.id, label: `🃏 ${d.name}` })),
+              ].map((opt) => (
+                <Pressable
+                  key={opt.id || 'all'}
+                  onPress={() => {
+                    setDeckFilter(opt.id);
+                    setCurrentPage(1);
+                  }}
+                  style={[styles.dfPill, effDeckFilter === opt.id && styles.dfPillActive]}>
+                  <Text style={[styles.dfPillText, effDeckFilter === opt.id && styles.dfPillTextActive]}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
         {total === 0 ? (
           <Text style={styles.empty}>
-            {editMode ? 'No cards yet. Tap "Add cards".' : 'No cards in this binder yet.'}
+            {editMode
+              ? 'No cards yet. Tap "Add cards".'
+              : effDeckFilter
+                ? 'No cards match this deck filter.'
+                : 'No cards in this binder yet.'}
           </Text>
         ) : showDraggable ? (
           <DraggableFlatList
@@ -599,8 +689,9 @@ export default function BinderDetailScreen() {
           />
         ) : (
           <BinderPager
-            listings={sortedListings}
+            listings={displayListings}
             cards={cards}
+            decksById={decksById}
             numColumns={numColumns}
             pageSize={pageSize}
             currentPage={currentPage}
@@ -719,8 +810,9 @@ export default function BinderDetailScreen() {
       <CardPagerModal
         visible={expandedIdx !== null}
         onClose={() => setExpandedIdx(null)}
-        listings={sortedListings}
+        listings={displayListings}
         cards={cards}
+        decksById={decksById}
         initialIndex={expandedIdx ?? 0}
         isWishlist={isWishlist}
         onReceive={
@@ -925,6 +1017,7 @@ function Pagination({
 function BinderPager({
   listings,
   cards,
+  decksById,
   numColumns,
   pageSize,
   currentPage,
@@ -934,6 +1027,7 @@ function BinderPager({
 }: {
   listings: Listing[];
   cards: Record<string, CardInfo>;
+  decksById: Record<string, { id: string; name: string | null }>;
   numColumns: number;
   pageSize: number;
   currentPage: number;
@@ -1050,6 +1144,11 @@ function BinderPager({
                         ]}
                       />
                     )}
+                    {isWishlist && l.deck_id && decksById[l.deck_id] ? (
+                      <View style={styles.deckTileBadge}>
+                        <Text style={styles.deckTileBadgeText}>🃏</Text>
+                      </View>
+                    ) : null}
                     <Text style={[styles.cardCode, { width: cardW }]} numberOfLines={1}>
                       {l.card_code}
                     </Text>
@@ -2230,6 +2329,7 @@ function CardPagerModal({
   onClose,
   listings,
   cards,
+  decksById,
   initialIndex,
   isWishlist,
   onReceive,
@@ -2238,6 +2338,7 @@ function CardPagerModal({
   onClose: () => void;
   listings: Listing[];
   cards: Record<string, CardInfo>;
+  decksById: Record<string, { id: string; name: string | null }>;
   initialIndex: number;
   isWishlist: boolean;
   onReceive?: (l: Listing) => void; // owner "Got it" on a wishlist card
@@ -2288,6 +2389,11 @@ function CardPagerModal({
                 )}
                 <Text style={styles.modalCardName}>{card?.name ?? item.card_code}</Text>
                 <Text style={styles.modalCode}>{item.card_code}</Text>
+                {isWishlist && item.deck_id && decksById[item.deck_id] ? (
+                  <View style={styles.deckOriginPill}>
+                    <Text style={styles.deckOriginPillText}>🃏 {decksById[item.deck_id]!.name || 'deck'}</Text>
+                  </View>
+                ) : null}
                 {!isWishlist ? (
                   <>
                     <View style={styles.modalRow}>
@@ -2325,6 +2431,49 @@ function CardPagerModal({
 const styles = StyleSheet.create({
   loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary },
   grid: { padding: 8 },
+
+  // "For deck" filter bar (owner wishlist) + deck-origin pills
+  deckFilterBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  deckFilterLabel: {
+    color: colors.textMuted,
+    fontFamily: fonts.body,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  deckFilterPills: { gap: 6, paddingRight: 12 },
+  dfPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgCard,
+  },
+  dfPillActive: { backgroundColor: '#4d9de0', borderColor: '#4d9de0' },
+  dfPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
+  dfPillTextActive: { color: '#0c0a12', fontFamily: fonts.bodyBold },
+  deckTileBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: 'rgba(77,157,224,0.92)',
+    borderRadius: 999,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  deckTileBadgeText: { fontSize: 10 },
+  deckOriginPill: {
+    alignSelf: 'center',
+    marginTop: 8,
+    backgroundColor: 'rgba(77,157,224,0.18)',
+    borderColor: '#4d9de0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  deckOriginPillText: { color: '#9cc7ee', fontFamily: fonts.bodyBold, fontSize: 12 },
   header: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   title: { fontSize: 22, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
   titleOwner: { fontSize: 18, color: colors.textSecondary, fontFamily: fonts.body },
