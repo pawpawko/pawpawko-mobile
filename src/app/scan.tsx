@@ -7,6 +7,7 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/lib/auth';
+import { addCardToBinder, createTradeBinder, listTradeBinders, type TradeBinder } from '@/lib/binders';
 import { scanForCard, type ScannedCard } from '@/lib/cardScan';
 import { suffixFromSlug } from '@/lib/slug';
 import { supabase } from '@/lib/supabase';
@@ -59,7 +60,12 @@ export default function ScanScreen() {
   const [busy, setBusy] = useState(false);
   const [scanned, setScanned] = useState<ScannedCard | null>(null);
   const [noMatch, setNoMatch] = useState<string | null>(null);
-  const [wishMsg, setWishMsg] = useState<string | null>(null);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
+  // Trade-binder picker state.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [tradeBinders, setTradeBinders] = useState<TradeBinder[] | null>(null);
+  const [bindersBusy, setBindersBusy] = useState(false);
+  const [qty, setQty] = useState(1);
 
   if (!permission) {
     return (
@@ -115,7 +121,7 @@ export default function ScanScreen() {
     if (busy || !cameraRef.current) return;
     setBusy(true);
     setNoMatch(null);
-    setWishMsg(null);
+    setAddMsg(null);
     try {
       // No skipProcessing: let the OS fix orientation so OCR reads upright text.
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.6 });
@@ -142,7 +148,7 @@ export default function ScanScreen() {
   async function addScannedToWishlist() {
     if (!scanned || !userId) return;
     const res = await addCardToWishlist(scanned.card_code, 'optcg', userId);
-    setWishMsg(
+    setAddMsg(
       res === 'duplicate'
         ? 'Already in your wishlist'
         : res === 'error'
@@ -151,10 +157,53 @@ export default function ScanScreen() {
     );
   }
 
+  // Open the trade-binder picker, loading the user's One Piece trade binders
+  // once (cached for the session).
+  async function openTradePicker() {
+    if (!userId) return;
+    setAddMsg(null);
+    setPickerOpen(true);
+    if (tradeBinders === null) {
+      setBindersBusy(true);
+      const list = await listTradeBinders(userId, 'optcg');
+      setTradeBinders(list);
+      setBindersBusy(false);
+    }
+  }
+
+  async function addToBinder(target: TradeBinder) {
+    if (!scanned) return;
+    const res = await addCardToBinder(target.id, scanned.card_code, qty);
+    setPickerOpen(false);
+    const name = target.name || 'trade binder';
+    setAddMsg(
+      res === 'duplicate'
+        ? `Already in ${name}`
+        : res === 'error'
+          ? 'Could not add — try again'
+          : `Added ${qty > 1 ? `${qty}× ` : ''}to ${name}`,
+    );
+  }
+
+  async function createAndAddToBinder() {
+    if (!userId || !scanned) return;
+    setBindersBusy(true);
+    const nb = await createTradeBinder(userId, 'optcg');
+    setBindersBusy(false);
+    if (!nb) {
+      setAddMsg('Could not create binder — try again');
+      return;
+    }
+    setTradeBinders((prev) => [...(prev ?? []), nb]);
+    await addToBinder(nb);
+  }
+
   function scanAgain() {
     setScanned(null);
     setNoMatch(null);
-    setWishMsg(null);
+    setAddMsg(null);
+    setPickerOpen(false);
+    setQty(1);
   }
 
   function switchMode(m: Mode) {
@@ -253,15 +302,76 @@ export default function ScanScreen() {
               {scanned.name}
             </Text>
             <Text style={styles.resultCode}>{scanned.card_code}</Text>
-            {wishMsg ? <Text style={styles.wishMsg}>{wishMsg}</Text> : null}
+            {addMsg ? <Text style={styles.wishMsg}>{addMsg}</Text> : null}
             <Pressable
               style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
+              onPress={openTradePicker}
+              disabled={!userId}>
+              <Text style={styles.primaryBtnText}>ADD TO TRADE BINDER</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.secondaryBtn, pressed && styles.btnPressed]}
               onPress={addScannedToWishlist}
               disabled={!userId}>
-              <Text style={styles.primaryBtnText}>ADD TO WISHLIST</Text>
+              <Text style={styles.secondaryBtnText}>ADD TO WISHLIST</Text>
             </Pressable>
             <Pressable style={styles.ghostBtn} onPress={scanAgain}>
               <Text style={styles.ghostBtnText}>Scan another</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {/* Trade-binder picker (renders above the result sheet) */}
+      {pickerOpen ? (
+        <View style={styles.resultWrap}>
+          <View style={styles.resultCard}>
+            <Text style={styles.pickerTitle}>ADD TO TRADE BINDER</Text>
+
+            <View style={styles.qtyRow}>
+              <Text style={styles.qtyLabel}>Quantity</Text>
+              <View style={styles.qtyControls}>
+                <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.max(1, q - 1))}>
+                  <Ionicons name="remove" size={18} color={colors.accent} />
+                </Pressable>
+                <Text style={styles.qtyValue}>{qty}</Text>
+                <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.min(99, q + 1))}>
+                  <Ionicons name="add" size={18} color={colors.accent} />
+                </Pressable>
+              </View>
+            </View>
+
+            {bindersBusy ? (
+              <ActivityIndicator color={colors.accent} style={{ marginVertical: 14 }} />
+            ) : (
+              <>
+                {(tradeBinders ?? []).map((b) => (
+                  <Pressable
+                    key={b.id}
+                    style={({ pressed }) => [styles.binderRow, pressed && styles.btnPressed]}
+                    onPress={() => addToBinder(b)}>
+                    <Ionicons name="albums-outline" size={18} color={colors.accent} />
+                    <Text style={styles.binderRowText} numberOfLines={1}>
+                      {b.name || 'Trade binder'}
+                    </Text>
+                  </Pressable>
+                ))}
+                <Pressable
+                  style={({ pressed }) => [styles.binderRow, pressed && styles.btnPressed]}
+                  onPress={createAndAddToBinder}>
+                  <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
+                  <Text style={styles.binderRowText}>New trade binder</Text>
+                </Pressable>
+                {tradeBinders && tradeBinders.length === 0 ? (
+                  <Text style={styles.pickerHint}>
+                    No One Piece trade binder yet — create one above.
+                  </Text>
+                ) : null}
+              </>
+            )}
+
+            <Pressable style={styles.ghostBtn} onPress={() => setPickerOpen(false)}>
+              <Text style={styles.ghostBtnText}>Cancel</Text>
             </Pressable>
           </View>
         </View>
@@ -380,6 +490,18 @@ const styles = StyleSheet.create({
   wishMsg: { color: colors.accent, fontFamily: fonts.body, fontSize: 13, marginTop: 2 },
   primaryBtn: { marginTop: 10, padding: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center', alignSelf: 'stretch' },
   primaryBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
+  secondaryBtn: { marginTop: 8, padding: 14, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.borderAccent, alignItems: 'center', alignSelf: 'stretch' },
+  secondaryBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
+
+  pickerTitle: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 15, marginBottom: 4 },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', marginBottom: 4 },
+  qtyLabel: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 14 },
+  qtyControls: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  qtyBtn: { width: 36, height: 36, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.borderAccent, alignItems: 'center', justifyContent: 'center' },
+  qtyValue: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 16, minWidth: 24, textAlign: 'center' },
+  binderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
+  binderRowText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15, flex: 1 },
+  pickerHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, textAlign: 'center', marginTop: 4 },
   ghostBtn: { marginTop: 4, padding: 10 },
   ghostBtnText: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 14 },
 });
