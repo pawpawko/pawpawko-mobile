@@ -23,10 +23,12 @@ import {
   DeckCardRow,
   DeckRow,
   GAME,
+  OwnedElsewhere,
   Validity,
   capFor,
   fetchValidity,
   isBase,
+  loadOwnedElsewhere,
   loadRules,
   lookupCards,
   standardLegal,
@@ -82,6 +84,9 @@ export default function DeckEditorScreen() {
   const cardArtRef = useRef<Record<string, ArtRow>>({});
   cardArtRef.current = cardArt;
   const [cards, setCards] = useState<DeckCardRow[]>([]);
+  // Copies of each base card you physically hold in non-wishlist binders —
+  // powers the 📦 owned-elsewhere badge (tap to mark owned).
+  const [ownedElsewhere, setOwnedElsewhere] = useState<OwnedElsewhere>({});
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [validity, setValidity] = useState<Validity | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -289,9 +294,11 @@ export default function DeckEditorScreen() {
     } catch {}
     setCardArt(restored);
 
+    if (session?.user.id) setOwnedElsewhere(await loadOwnedElsewhere(session.user.id));
+
     await reloadCards(d.id);
     setLoading(false);
-  }, [id, reloadCards, router]);
+  }, [id, reloadCards, router, session?.user.id]);
 
   function cycleArt() {
     if (leaderArts.length < 2 || !deck) return;
@@ -505,6 +512,26 @@ export default function DeckEditorScreen() {
         setErr(error.message);
         return;
       }
+    }
+    await reloadCards(deck.id);
+  }
+
+  // Mark owned up to an absolute value (clamped to [0, qty]); used by the
+  // owned-elsewhere badge to reconcile the deck against your binder count.
+  async function markOwned(code: string, value: number) {
+    const row = cards.find((r) => r.card_code === code);
+    if (!row || !deck) return;
+    const o = Math.max(0, Math.min(row.quantity, value));
+    if (o === row.owned) return;
+    setErr('');
+    const { error } = await supabase
+      .from('deck_cards')
+      .update({ owned: o })
+      .eq('deck_id', deck.id)
+      .eq('card_code', code);
+    if (error) {
+      setErr(error.message);
+      return;
     }
     await reloadCards(deck.id);
   }
@@ -827,6 +854,11 @@ export default function DeckEditorScreen() {
             const isShort = r.owned < r.quantity;
             const highlight = showMissing && isShort; // unowned copies → flag it
             const dim = showMissing && !isShort; // fully owned → fade back
+            // Owned-elsewhere: this card is short in the deck but you hold more
+            // copies in a non-wishlist binder than you've marked owned. Badge →
+            // tap to mark owned up to your held count (never down).
+            const oeRow = ownedElsewhere[r.card_code];
+            const oe = isShort && oeRow && oeRow.qty > r.owned ? oeRow : null;
             return (
               <Pressable
                 key={r.card_code}
@@ -842,6 +874,14 @@ export default function DeckEditorScreen() {
                     {highlight ? `x${r.quantity - r.owned}` : r.quantity > 4 ? 'X' : `x${r.quantity}`}
                   </Text>
                 </View>
+                {oe ? (
+                  <Pressable
+                    style={styles.oeBadge}
+                    onPress={() => markOwned(r.card_code, Math.min(r.quantity, Math.max(r.owned, oe.qty)))}
+                    accessibilityLabel={`You have ${oe.qty} in ${oe.binders.join(', ')} — tap to mark owned`}>
+                    <Text style={styles.oeText}>📦 ×{oe.qty}</Text>
+                  </Pressable>
+                ) : null}
               </Pressable>
             );
           })}
@@ -1265,6 +1305,16 @@ const styles = StyleSheet.create({
   },
   qtyBadgeMissing: { backgroundColor: '#d98a8a', borderColor: '#d98a8a' },
   qtyText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 11 },
+  oeBadge: {
+    position: 'absolute',
+    bottom: 3,
+    left: 3,
+    backgroundColor: 'rgba(126,201,106,0.92)',
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  oeText: { color: '#0c0a12', fontFamily: fonts.bodyBold, fontSize: 10 },
 
   pillRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   pill: {
