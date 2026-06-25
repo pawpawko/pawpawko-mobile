@@ -393,7 +393,9 @@ export default function BinderDetailScreen() {
       setSortMode(next === '3x3' ? 'custom-3x3' : 'custom-4x3');
     }
     setCurrentPage(1);
-    if (!id) return;
+    // binders-row writes are owner-only (binders_update RLS). Collaborators keep an
+    // ephemeral local layout but must not attempt the persist (it would RLS-reject).
+    if (!id || !isOwner) return;
     const { error } = await supabase.from('binders').update({ layout: next }).eq('id', id);
     if (error) console.warn('layout save failed:', error.message);
   }
