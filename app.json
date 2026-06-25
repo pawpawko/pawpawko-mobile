@@ -7,6 +7,12 @@
     "icon": "./assets/images/icon.png",
     "scheme": "pawpawkomobile",
     "userInterfaceStyle": "automatic",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ac26976e-95f7-4397-858c-3f9b4c68d158"
+    },
     "ios": {
       "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.pawpawko.app"
