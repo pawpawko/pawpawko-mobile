@@ -384,6 +384,41 @@ export default function DeckEditorScreen() {
     await reloadCards(deck.id);
   }
 
+  // Press-and-hold a stepper to jump to the extreme (mirrors web setCardValue):
+  // qty min→1 / max→cap (or 50 for unlimited cards); owned min→0 / max→qty.
+  async function jump(code: string, kind: 'qty' | 'owned', dir: 'min' | 'max') {
+    const row = cards.find((r) => r.card_code === code);
+    if (!row || !deck) return;
+    setErr('');
+    if (kind === 'qty') {
+      const cap = capFor(code);
+      const q = dir === 'min' ? 1 : cap ?? 50;
+      if (q === row.quantity) return;
+      const { error } = await supabase
+        .from('deck_cards')
+        .update({ quantity: q, owned: Math.min(row.owned, q) })
+        .eq('deck_id', deck.id)
+        .eq('card_code', code);
+      if (error) {
+        setErr(error.message);
+        return;
+      }
+    } else {
+      const o = dir === 'min' ? 0 : row.quantity;
+      if (o === row.owned) return;
+      const { error } = await supabase
+        .from('deck_cards')
+        .update({ owned: o })
+        .eq('deck_id', deck.id)
+        .eq('card_code', code);
+      if (error) {
+        setErr(error.message);
+        return;
+      }
+    }
+    await reloadCards(deck.id);
+  }
+
   async function addCard(card: CardInfo) {
     if (!deck) return;
     setErr('');
@@ -654,6 +689,8 @@ export default function DeckEditorScreen() {
                 value={selectedRow.quantity}
                 onMinus={() => step(selectedRow.card_code, 'qty', -1)}
                 onPlus={() => step(selectedRow.card_code, 'qty', 1)}
+                onLongMinus={() => jump(selectedRow.card_code, 'qty', 'min')}
+                onLongPlus={() => jump(selectedRow.card_code, 'qty', 'max')}
                 plusDisabled={capFor(selectedRow.card_code) !== null && selectedRow.quantity >= (capFor(selectedRow.card_code) as number)}
               />
               <Stepper
@@ -661,6 +698,8 @@ export default function DeckEditorScreen() {
                 value={`${selectedRow.owned}/${selectedRow.quantity}`}
                 onMinus={() => step(selectedRow.card_code, 'owned', -1)}
                 onPlus={() => step(selectedRow.card_code, 'owned', 1)}
+                onLongMinus={() => jump(selectedRow.card_code, 'owned', 'min')}
+                onLongPlus={() => jump(selectedRow.card_code, 'owned', 'max')}
                 minusDisabled={selectedRow.owned <= 0}
                 plusDisabled={selectedRow.owned >= selectedRow.quantity}
               />
@@ -775,6 +814,8 @@ function Stepper({
   value,
   onMinus,
   onPlus,
+  onLongMinus,
+  onLongPlus,
   minusDisabled,
   plusDisabled,
 }: {
@@ -782,17 +823,31 @@ function Stepper({
   value: number | string;
   onMinus: () => void;
   onPlus: () => void;
+  // Press-and-hold jumps to the extreme; RN suppresses onPress after a long
+  // press fires, so no separate guard is needed (cf. web's holdJustFired).
+  onLongMinus?: () => void;
+  onLongPlus?: () => void;
   minusDisabled?: boolean;
   plusDisabled?: boolean;
 }) {
   return (
     <View style={styles.stepRow}>
       <Text style={styles.stepLabel}>{label}</Text>
-      <Pressable onPress={onMinus} disabled={minusDisabled} style={[styles.stepBtn, minusDisabled && styles.stepBtnOff]}>
+      <Pressable
+        onPress={onMinus}
+        onLongPress={onLongMinus}
+        delayLongPress={450}
+        disabled={minusDisabled}
+        style={[styles.stepBtn, minusDisabled && styles.stepBtnOff]}>
         <Text style={styles.stepBtnText}>−</Text>
       </Pressable>
       <Text style={styles.stepVal}>{value}</Text>
-      <Pressable onPress={onPlus} disabled={plusDisabled} style={[styles.stepBtn, plusDisabled && styles.stepBtnOff]}>
+      <Pressable
+        onPress={onPlus}
+        onLongPress={onLongPlus}
+        delayLongPress={450}
+        disabled={plusDisabled}
+        style={[styles.stepBtn, plusDisabled && styles.stepBtnOff]}>
         <Text style={styles.stepBtnText}>＋</Text>
       </Pressable>
     </View>
