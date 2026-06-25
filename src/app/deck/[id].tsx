@@ -35,6 +35,9 @@ import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
 const artKey = (deckId: string) => `pawpaw:deckArt:${deckId}`;
+// Per-card alt-art override map, persisted separately from the leader's art.
+const cardArtKey = (deckId: string) => `pawpaw:deckCardArt:${deckId}`;
+type ArtRow = { card_code: string; image_url: string | null; image_url_lg: string | null };
 
 // Deck card grid: a fixed column count whose tile width is derived from the
 // screen width so cards scale across phone sizes (and fill the row edge-to-edge).
@@ -69,6 +72,15 @@ export default function DeckEditorScreen() {
     { card_code: string; image_url: string | null; image_url_lg: string | null }[]
   >([]);
   const [artIdx, setArtIdx] = useState(0);
+  // Per-card alt-art: the deck stores BASE codes, so a chosen print is a
+  // display-only override persisted per deck+card (mirrors web cardArt).
+  // `cardArt` maps base code → chosen alt-print row (drives the grid tiles);
+  // `selArts`/`selArtIdx` drive the swap button in the selected-card editor.
+  const [cardArt, setCardArt] = useState<Record<string, ArtRow>>({});
+  const [selArts, setSelArts] = useState<ArtRow[]>([]);
+  const [selArtIdx, setSelArtIdx] = useState(0);
+  const cardArtRef = useRef<Record<string, ArtRow>>({});
+  cardArtRef.current = cardArt;
   const [cards, setCards] = useState<DeckCardRow[]>([]);
   const [info, setInfo] = useState<Record<string, CardInfo>>({});
   const [validity, setValidity] = useState<Validity | null>(null);
@@ -252,6 +264,31 @@ export default function DeckEditorScreen() {
     const saved = await AsyncStorage.getItem(artKey(d.id));
     setArtIdx(Math.max(0, list.findIndex((c) => c.card_code === saved)));
 
+    // Restore per-card alt-art choices (deck-grid display overrides). Only
+    // alt prints (_p…) are persisted; base prints use the default image.
+    const restored: Record<string, ArtRow> = {};
+    try {
+      const raw = await AsyncStorage.getItem(cardArtKey(d.id));
+      const savedMap: Record<string, string> = raw ? JSON.parse(raw) : {};
+      const codes = Object.values(savedMap).filter((x) => /_p\d+$/i.test(String(x)));
+      if (codes.length) {
+        const { data: artRows } = await supabase
+          .from('cards')
+          .select('card_code,image_url,image_url_lg')
+          .eq('game', GAME)
+          .in('card_code', codes);
+        const byCode: Record<string, ArtRow> = {};
+        (artRows ?? []).forEach((c: any) => {
+          byCode[c.card_code] = c;
+        });
+        Object.keys(savedMap).forEach((base) => {
+          const row = byCode[savedMap[base]];
+          if (row) restored[base] = row;
+        });
+      }
+    } catch {}
+    setCardArt(restored);
+
     await reloadCards(d.id);
     setLoading(false);
   }, [id, reloadCards, router]);
@@ -261,6 +298,59 @@ export default function DeckEditorScreen() {
     const next = (artIdx + 1) % leaderArts.length;
     setArtIdx(next);
     AsyncStorage.setItem(artKey(deck.id), leaderArts[next].card_code).catch(() => {});
+  }
+
+  // Load the selected card's prints (base + _p variants) so the editor can
+  // offer an art swap. Reads cardArt via a ref so cycling doesn't re-fetch.
+  useEffect(() => {
+    if (!selected) {
+      setSelArts([]);
+      setSelArtIdx(0);
+      return;
+    }
+    const base = selected;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('cards')
+        .select('card_code,image_url,image_url_lg')
+        .eq('game', GAME)
+        .like('card_code', base + '%');
+      const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(_p\\d+)?$`, 'i');
+      const arts = (data ?? [])
+        .filter((c: any) => re.test(c.card_code))
+        .sort((a: any, b: any) => a.card_code.localeCompare(b.card_code)) as ArtRow[];
+      if (cancelled) return;
+      setSelArts(arts);
+      const chosen = cardArtRef.current[base]?.card_code;
+      setSelArtIdx(Math.max(0, arts.findIndex((c) => c.card_code === chosen)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  function persistCardArt(deckId: string, m: Record<string, ArtRow>) {
+    const out: Record<string, string> = {};
+    Object.keys(m).forEach((base) => {
+      if (m[base]) out[base] = m[base].card_code;
+    });
+    AsyncStorage.setItem(cardArtKey(deckId), JSON.stringify(out)).catch(() => {});
+  }
+
+  function cycleCardArt() {
+    if (selArts.length < 2 || !deck || !selected) return;
+    const base = selected;
+    const next = (selArtIdx + 1) % selArts.length;
+    setSelArtIdx(next);
+    const row = selArts[next];
+    setCardArt((prev) => {
+      const m = { ...prev };
+      if (/_p\d+$/i.test(row.card_code)) m[base] = row; // alt print → grid override
+      else delete m[base]; // back to base print → no override
+      persistCardArt(deck.id, m);
+      return m;
+    });
   }
 
   useEffect(() => {
@@ -679,7 +769,24 @@ export default function DeckEditorScreen() {
         {/* Selected card editor */}
         {selectedRow ? (
           <View style={styles.editor}>
-            <Image source={{ uri: info[selectedRow.card_code]?.image_url ?? undefined }} style={styles.editorImg} contentFit="cover" />
+            <View style={styles.editorImgWrap}>
+              <Image
+                source={{
+                  uri:
+                    selArts[selArtIdx]?.image_url ??
+                    cardArt[selectedRow.card_code]?.image_url ??
+                    info[selectedRow.card_code]?.image_url ??
+                    undefined,
+                }}
+                style={styles.editorImg}
+                contentFit="cover"
+              />
+              {selArts.length > 1 ? (
+                <Pressable onPress={cycleCardArt} style={styles.cardArtSwap} accessibilityLabel="Swap card art">
+                  <Ionicons name="sync" size={12} color="#fff" />
+                </Pressable>
+              ) : null}
+            </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.editorName} numberOfLines={1}>
                 {info[selectedRow.card_code]?.name ?? selectedRow.card_code}
@@ -726,7 +833,7 @@ export default function DeckEditorScreen() {
                 style={[styles.cardTile, { width: cardW }, dim && styles.tileDim]}
                 onPress={() => setSelected(isSel ? null : r.card_code)}>
                 <Image
-                  source={{ uri: c?.image_url ?? undefined }}
+                  source={{ uri: cardArt[r.card_code]?.image_url ?? c?.image_url ?? undefined }}
                   style={[styles.cardImg, isSel && styles.cardImgSel, highlight && styles.cardImgMissing]}
                   contentFit="cover"
                 />
@@ -1101,7 +1208,18 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 16,
   },
+  editorImgWrap: { width: 46, height: 64 },
   editorImg: { width: 46, height: 64, borderRadius: 4 },
+  cardArtSwap: {
+    position: 'absolute',
+    right: -6,
+    bottom: -6,
+    backgroundColor: 'rgba(12,10,18,0.85)',
+    borderRadius: 999,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
   editorName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14, marginBottom: 6 },
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   stepLabel: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11, width: 48 },
