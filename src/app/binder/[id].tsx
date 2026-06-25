@@ -34,6 +34,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
+import { SyncStatusBar } from '@/components/sync-status';
 import { useAuth } from '@/lib/auth';
 import { addCardToWishlist, type WishlistResult } from '@/lib/wishlist';
 import {
@@ -56,8 +57,10 @@ import {
   type ListingType,
   type SortMode,
 } from '@/lib/binder-constants';
+import { cacheKeys, readCache, writeCache } from '@/lib/offline-cache';
 import { binderShareUrl } from '@/lib/slug';
 import { supabase } from '@/lib/supabase';
+import { enqueue, newId, pendingForBinder } from '@/lib/sync-queue';
 import { colors, fonts, radius } from '@/lib/theme';
 
 type Flair = 'trade' | 'wishlist';
@@ -97,6 +100,13 @@ type CardInfo = {
   supertype?: string | null;
   hp?: number | null;
   release_order?: number | null;
+};
+
+// Snapshot persisted to the offline cache for own binders.
+type BinderSnapshot = {
+  header: BinderHeader;
+  listings: Listing[];
+  cardsById: Record<string, CardInfo>;
 };
 
 export default function BinderDetailScreen() {
@@ -186,8 +196,19 @@ export default function BinderDetailScreen() {
   // ---- Initial load ----
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!id) return;
-    if (!opts?.silent) setLoading(true);
-    const [hRes, lRes] = await Promise.all([
+    if (!opts?.silent) {
+      setLoading(true);
+      // Instant paint from cache (also the offline path). The network refresh
+      // below overrides it; un-synced edits are kept by the merge guard.
+      const cached = await readCache<BinderSnapshot>(cacheKeys.binder(id));
+      if (cached) {
+        setHeader(cached.header);
+        if (pendingForBinder(id) === 0) setListings(cached.listings);
+        setCards(cached.cardsById);
+        setLoading(false);
+      }
+    }
+    const res = await Promise.all([
       supabase.rpc('get_binder_public', { p_binder_id: id }),
       canEdit
         ? supabase
@@ -200,14 +221,22 @@ export default function BinderDetailScreen() {
             // last page, which is where the add flow navigates to.
             .order('created_at', { ascending: true })
         : supabase.rpc('get_binder_listings_public', { p_binder_id: id }),
-    ]);
+    ]).catch(() => null);
+    if (!res) {
+      // Offline / transport error — keep whatever we hydrated from cache.
+      if (!opts?.silent) setLoading(false);
+      return;
+    }
+    const [hRes, lRes] = res;
     if (hRes.error) console.warn('header', hRes.error.message);
     if (lRes.error) console.warn('listings', lRes.error.message);
 
     const head: BinderHeader | null = Array.isArray(hRes.data) ? hRes.data[0] : hRes.data;
     const lst: Listing[] = (lRes.data ?? []) as Listing[];
     setHeader(head);
-    setListings(lst);
+    // Merge-on-refresh guard: a server snapshot must not clobber un-synced
+    // optimistic edits (last-write-wins keeps them until the queue flushes).
+    if (pendingForBinder(id) === 0) setListings(lst);
 
     if (head && lst.length > 0) {
       const codes = Array.from(new Set(lst.map((l) => l.card_code)));
@@ -235,6 +264,14 @@ export default function BinderDetailScreen() {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // Persist this binder for offline viewing whenever its displayed data
+  // changes (owner only — scope is "my binders"). Captures optimistic edits
+  // too, so reopening offline shows un-synced changes.
+  useEffect(() => {
+    if (!id || !isOwner || !header) return;
+    void writeCache(cacheKeys.binder(id), { header, listings, cardsById: cards });
+  }, [id, isOwner, header, listings, cards]);
 
   // Deck-origin lookup (owner + wishlist only): the auto wishlist-sync stamps
   // deck-sourced rows with listings.deck_id; map those ids → deck names so the
@@ -402,43 +439,44 @@ export default function BinderDetailScreen() {
 
   async function addListing(card: CardInfo, qty: number, ltype: ListingType) {
     if (!id) return false;
-    const { data, error } = await supabase
-      .from('listings')
-      .insert({ binder_id: id, card_code: card.card_code, quantity: qty, listing_type: ltype })
-      .select('id, quantity, listing_type, card_code, sort_order')
-      .single();
-    if (error) {
-      Alert.alert('Could not add listing', error.message);
-      return false;
-    }
-    setListings((ls) => [...ls, data as Listing]);
+    // Optimistic insert with a client-generated id (also the op's idempotency
+    // key). New rows have no sort_order yet → they sort to the end, matching
+    // the server default.
+    const listingId = newId();
+    const row: Listing = {
+      id: listingId,
+      card_code: card.card_code,
+      quantity: qty,
+      listing_type: ltype,
+      sort_order: null,
+    };
+    setListings((ls) => [...ls, row]);
     // Ensure card metadata is in the lookup
     setCards((map) => (map[card.card_code] ? map : { ...map, [card.card_code]: card }));
+    void enqueue({
+      kind: 'add',
+      binderId: id,
+      listingId,
+      cardCode: card.card_code,
+      quantity: qty,
+      listingType: ltype,
+    });
     return true;
   }
 
   async function updateListing(listingId: string, qty: number, ltype: ListingType) {
-    const { error } = await supabase
-      .from('listings')
-      .update({ quantity: qty, listing_type: ltype })
-      .eq('id', listingId);
-    if (error) {
-      Alert.alert('Could not update listing', error.message);
-      return false;
-    }
     setListings((ls) =>
       ls.map((l) => (l.id === listingId ? { ...l, quantity: qty, listing_type: ltype } : l)),
     );
+    if (id) {
+      void enqueue({ kind: 'update', binderId: id, listingId, quantity: qty, listingType: ltype });
+    }
     return true;
   }
 
   async function removeListing(listingId: string) {
-    const { error } = await supabase.from('listings').delete().eq('id', listingId);
-    if (error) {
-      Alert.alert('Could not remove listing', error.message);
-      return false;
-    }
     setListings((ls) => ls.filter((l) => l.id !== listingId));
+    if (id) void enqueue({ kind: 'remove', binderId: id, listingId });
     return true;
   }
 
@@ -447,67 +485,51 @@ export default function BinderDetailScreen() {
   // this wishlist row. Manual rows just decrement (and delete at zero). Mirrors
   // the web markReceived/persistReceive flow.
   async function markReceived(l: Listing) {
-    if (l.deck_id) {
-      const { data: dc } = await supabase
-        .from('deck_cards')
-        .select('quantity, owned')
-        .eq('deck_id', l.deck_id)
-        .eq('card_code', l.card_code)
-        .maybeSingle();
-      if (dc) {
-        const newOwned = Math.min(dc.quantity, (dc.owned ?? 0) + 1);
-        await supabase
-          .from('deck_cards')
-          .update({ owned: newOwned })
-          .eq('deck_id', l.deck_id)
-          .eq('card_code', l.card_code);
-      } else {
-        await supabase.from('listings').delete().eq('id', l.id);
-      }
-    } else {
-      const { data: cur } = await supabase
-        .from('listings')
-        .select('quantity')
-        .eq('id', l.id)
-        .maybeSingle();
-      if (!cur) return;
-      if ((cur.quantity ?? 1) > 1) {
-        await supabase.from('listings').update({ quantity: cur.quantity - 1 }).eq('id', l.id);
-      } else {
-        await supabase.from('listings').delete().eq('id', l.id);
-      }
+    // Optimistic: a received copy shrinks the wishlist row by one (the server
+    // does the same — manual rows decrement; deck-synced rows shrink via the
+    // sync trigger after the deck's owned count goes up). The op replays the
+    // exact server logic, re-reading the current quantity at flush time.
+    setListings((ls) =>
+      ls.flatMap((x) => {
+        if (x.id !== l.id) return [x];
+        const q = (x.quantity ?? 1) - 1;
+        return q > 0 ? [{ ...x, quantity: q }] : [];
+      }),
+    );
+    if (id) {
+      void enqueue({
+        kind: 'markReceived',
+        binderId: id,
+        listingId: l.id,
+        cardCode: l.card_code,
+        deckId: l.deck_id ?? null,
+      });
     }
-    await loadAll({ silent: true });
   }
 
   async function removeAllForCard(cardCode: string) {
     if (!id) return false;
-    const { error } = await supabase
-      .from('listings')
-      .delete()
-      .eq('binder_id', id)
-      .eq('card_code', cardCode);
-    if (error) {
-      Alert.alert('Could not remove listings', error.message);
-      return false;
-    }
     setListings((ls) => ls.filter((l) => l.card_code !== cardCode));
+    void enqueue({ kind: 'removeAllForCard', binderId: id, cardCode });
     return true;
   }
 
   // Persist a freshly-ordered listings array by writing sort_order = index for each row.
   async function persistPositions(reordered: Listing[]) {
-    setListings(reordered.map((l, i) => ({ ...l, sort_order: i })));
-    const payload = reordered.map((l, i) => ({
-      id: l.id,
-      sort_order: i,
-      binder_id: id!,
-      card_code: l.card_code,
-      quantity: l.quantity,
-      listing_type: l.listing_type,
-    }));
-    const { error } = await supabase.from('listings').upsert(payload, { onConflict: 'id' });
-    if (error) console.warn('reorder save failed:', error.message);
+    const next = reordered.map((l, i) => ({ ...l, sort_order: i }));
+    setListings(next);
+    if (!id) return;
+    void enqueue({
+      kind: 'reorder',
+      binderId: id,
+      order: next.map((l, i) => ({
+        id: l.id,
+        sort_order: i,
+        card_code: l.card_code,
+        quantity: l.quantity,
+        listing_type: l.listing_type,
+      })),
+    });
   }
 
   if (loading) {
@@ -578,6 +600,8 @@ export default function BinderDetailScreen() {
             <FlairPill value={header.flair} kind="flair" />
           </View>
         </View>
+
+        <SyncStatusBar binderId={id} />
 
         {editMode ? (
           <EditToolbar

@@ -20,6 +20,7 @@ import {
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
 import { useAuth } from '@/lib/auth';
+import { cacheKeys, readCache, writeCache } from '@/lib/offline-cache';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
@@ -73,18 +74,35 @@ export default function MyBindersScreen() {
   const load = useCallback(
     async (mode: 'initial' | 'focus' | 'pull' = 'focus') => {
       if (!session?.user.id) return;
+      const uid = session.user.id;
       if (mode === 'initial') setLoading(true);
       if (mode === 'pull') setRefreshing(true);
-      const [ownRes, sharedRes] = await Promise.all([
+
+      // Instant paint from cache on the first load (also the offline path):
+      // own binders + their counts. Shared binders stay online-only.
+      if (mode === 'initial' && !hasLoadedOnce.current) {
+        const cached = await readCache<{ own: Binder[]; counts: Record<string, number> }>(
+          cacheKeys.myBinders(uid),
+        );
+        if (cached) {
+          setRows(cached.own);
+          setCounts(cached.counts);
+          setLoading(false);
+        }
+      }
+
+      const fetched = await Promise.all([
         supabase
           .from('binders')
           .select('id,name,description,category,flair,sleeve_image_url')
-          .eq('user_id', session.user.id)
+          .eq('user_id', uid)
           .order('created_at', { ascending: true }),
         supabase.rpc('shared_binders'), // binders shared WITH me
-      ]);
+      ]).catch(() => null);
       if (mode === 'initial') setLoading(false);
       if (mode === 'pull') setRefreshing(false);
+      if (!fetched) return; // offline / transport error — keep the cached view
+      const [ownRes, sharedRes] = fetched;
       hasLoadedOnce.current = true;
       if (ownRes.error) {
         console.warn('binders fetch error', ownRes.error.message);
@@ -111,8 +129,13 @@ export default function MyBindersScreen() {
             .eq('binder_id', b.id);
           return [b.id, count ?? 0] as const;
         }),
-      );
+      ).catch(() => null);
+      if (!entries) return;
       setCounts(Object.fromEntries(entries));
+      // Cache OWN binders + their counts for offline (scope: my binders only).
+      const ownIds = new Set(own.map((b) => b.id));
+      const ownCounts = Object.fromEntries(entries.filter(([bid]) => ownIds.has(bid)));
+      void writeCache(cacheKeys.myBinders(uid), { own, counts: ownCounts });
     },
     [session?.user.id],
   );

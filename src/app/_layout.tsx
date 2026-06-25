@@ -8,7 +8,9 @@ import { View, type TextStyle } from 'react-native';
 import { DiceLoader } from '@/components/dice-loader';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AutoSearchProvider } from '@/lib/auto-search-context';
+import { ConnectivityProvider } from '@/lib/connectivity';
 import { NotificationsProvider } from '@/lib/notifications-context';
+import { SyncProvider } from '@/lib/sync-queue';
 import { colors } from '@/lib/theme';
 
 function AuthGate() {
@@ -139,13 +141,17 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <AutoSearchProvider>
-        <NotificationsProvider>
-          <StatusBar style="light" />
-          <AuthGate />
-        </NotificationsProvider>
-      </AutoSearchProvider>
-    </AuthProvider>
+    <ConnectivityProvider>
+      <AuthProvider>
+        <SyncProvider>
+          <AutoSearchProvider>
+            <NotificationsProvider>
+              <StatusBar style="light" />
+              <AuthGate />
+            </NotificationsProvider>
+          </AutoSearchProvider>
+        </SyncProvider>
+      </AuthProvider>
+    </ConnectivityProvider>
   );
 }
