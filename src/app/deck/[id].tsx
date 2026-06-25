@@ -25,16 +25,22 @@ import {
   DeckRow,
   GAME,
   OwnedElsewhere,
+  SearcherMeta,
   Validity,
   capFor,
+  cardMatchesSub,
+  evalSearcherGate,
   fetchValidity,
   formatDecklist,
+  hitChance,
   isBase,
   leaderLocked,
   loadOwnedElsewhere,
   loadRules,
   lookupCards,
   parseDecklist,
+  parseSearcher,
+  searcherTargetLabel,
   standardLegal,
 } from '@/lib/decks';
 import { supabase } from '@/lib/supabase';
@@ -96,6 +102,7 @@ export default function DeckEditorScreen() {
   const [selected, setSelected] = useState<string | null>(null);
   const [showMissing, setShowMissing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const [err, setErr] = useState('');
 
   // Decklist import (paste NxCODE lines → merge into this deck)
@@ -748,8 +755,8 @@ export default function DeckEditorScreen() {
                   </Pressable>
                 </>
               ) : null}
-              {/* Stats — to be wired to the show-stats feature later */}
-              <Pressable onPress={() => {}} style={styles.statsBtn} accessibilityLabel="Deck stats">
+              {/* Stats — counters / cost curve / searcher hit-rates */}
+              <Pressable onPress={() => setStatsOpen(true)} style={styles.statsBtn} accessibilityLabel="Deck stats">
                 <Ionicons name="stats-chart-outline" size={18} color={colors.textSecondary} />
               </Pressable>
               {/* Cost to Finish — price of the cards still needed */}
@@ -968,6 +975,8 @@ export default function DeckEditorScreen() {
         cards={cards}
         onAdd={addCard}
       />
+
+      <StatsModal visible={statsOpen} onClose={() => setStatsOpen(false)} cards={cards} info={info} leader={leader} />
 
       <Modal visible={importOpen} animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.addModal}>
@@ -1458,6 +1467,210 @@ function AddCardsModal({
   );
 }
 
+const hitColor = (p: number) => (p >= 75 ? '#7ec96a' : p >= 50 ? '#e8b757' : '#b0506a');
+
+// Gate flag shown beside a searcher's name (null when it always fires).
+function gateFlag(status: string): { text: string; color: string } | null {
+  if (status === 'fires') return { text: '✓ fires', color: '#7ec96a' };
+  if (status === 'dead') return { text: "✗ won't fire", color: '#b0506a' };
+  if (status === 'situational') return { text: 'if active', color: '#e8b757' };
+  return null;
+}
+
+// Deck stats over the 50 (excludes leader). Faithful port of web openStats:
+// counters bar, play-cost curve, and per-searcher hit-rates with leader-gate
+// evaluation, modeled at the turn you'd play each searcher.
+function StatsModal({
+  visible,
+  onClose,
+  cards,
+  info,
+  leader,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  cards: DeckCardRow[];
+  info: Record<string, CardInfo>;
+  leader: CardInfo | null;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const stats = useMemo(() => {
+    let c2000 = 0;
+    let c1000 = 0;
+    let cNone = 0;
+    let total = 0;
+    const costB: Record<number, number> = {};
+    cards.forEach((r) => {
+      const c = info[r.card_code] ?? ({} as CardInfo);
+      total += r.quantity;
+      if (c.counter === 2000) c2000 += r.quantity;
+      else if (c.counter === 1000) c1000 += r.quantity;
+      else cNone += r.quantity;
+      if (c.cost != null) costB[c.cost] = (costB[c.cost] ?? 0) + r.quantity;
+    });
+    const costs = Object.keys(costB).map(Number);
+    const maxCost = costs.length ? Math.max(...costs) : 0;
+    const maxN = costs.length ? Math.max(...costs.map((k) => costB[k])) : 0;
+    const curve: { cost: number; n: number; pct: number }[] = [];
+    for (let cc = 0; cc <= maxCost; cc++) {
+      const n = costB[cc] ?? 0;
+      curve.push({ cost: cc, n, pct: maxN ? Math.round((n / maxN) * 100) : 0 });
+    }
+
+    const searchers = cards
+      .map((r) => ({ r, meta: parseSearcher(info[r.card_code]?.effect_text) }))
+      .filter((x): x is { r: DeckCardRow; meta: SearcherMeta } => !!x.meta)
+      .map(({ r, meta }) => {
+        const c = info[r.card_code] ?? ({} as CardInfo);
+        // Cards this searcher can reveal (excludes its own copies — that one's gone).
+        const hits = cards
+          .filter(
+            (x) =>
+              x.card_code !== r.card_code &&
+              meta.filters.some((f) => cardMatchesSub(info[x.card_code] ?? ({} as CardInfo), f)),
+          )
+          .map((x) => ({ name: info[x.card_code]?.name || x.card_code, qty: x.quantity }))
+          .sort((a, b) => b.qty - a.qty);
+        const T = hits.reduce((s, h) => s + h.qty, 0);
+        const fresh = hitChance(total, T, meta.look);
+        // Draw-accurate: a cost-C searcher resolves ~turn C, by when you've seen
+        // ~5 (opening hand) + C cards; dig the rest for targets still in the deck.
+        const seen = Math.min(total - meta.look, 5 + (c.cost || 0));
+        const Dleft = Math.max(meta.look, total - seen);
+        const live = total > 0 ? hitChance(Dleft, (T * Dleft) / total, meta.look) : 0;
+        const gate = evalSearcherGate(meta.gate, leader);
+        return { r, c, meta, T, hits, fresh, live, gate };
+      })
+      .sort((a, b) => {
+        const ad = a.gate.status === 'dead' ? 1 : 0;
+        const bd = b.gate.status === 'dead' ? 1 : 0;
+        return ad - bd || b.live - a.live; // dead gates last, else most reliable first
+      });
+
+    const searcherCopies = searchers.reduce((s, x) => s + x.r.quantity, 0);
+    const openRaw = searchers.length ? hitChance(total, searcherCopies, 5) : 0;
+    // OPTCG gives a free mulligan (redraw all 5 once) → two shots at it.
+    const openAccess = searchers.length ? 1 - (1 - openRaw) * (1 - openRaw) : 0;
+
+    return { c2000, c1000, cNone, total, curve, searchers, searcherCopies, openAccess };
+  }, [cards, info, leader]);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.addModal}>
+        <View style={styles.addHeader}>
+          <Text style={styles.addTitle}>Deck stats</Text>
+          <Pressable onPress={onClose} style={{ padding: 6 }}>
+            <Ionicons name="close" size={26} color={colors.textPrimary} />
+          </Pressable>
+        </View>
+        <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+          {!cards.length ? (
+            <Text style={styles.priceEmpty}>No cards in the deck yet.</Text>
+          ) : (
+            <>
+              <Text style={styles.statHint}>
+                {stats.total} card{stats.total === 1 ? '' : 's'} in the deck
+                {stats.total !== 50 ? ' (not 50 yet)' : ''}.
+              </Text>
+
+              {/* Counters */}
+              <Text style={styles.statH4}>Counters</Text>
+              <View style={styles.counterBar}>
+                {stats.c2000 > 0 ? <View style={{ flex: stats.c2000, backgroundColor: '#7ec96a' }} /> : null}
+                {stats.c1000 > 0 ? <View style={{ flex: stats.c1000, backgroundColor: '#e8b757' }} /> : null}
+                {stats.cNone > 0 ? <View style={{ flex: stats.cNone, backgroundColor: '#b0506a' }} /> : null}
+              </View>
+              <View style={styles.legend}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#7ec96a' }]} />
+                  <Text style={styles.legendText}>+2000 × {stats.c2000}</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#e8b757' }]} />
+                  <Text style={styles.legendText}>+1000 × {stats.c1000}</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#b0506a' }]} />
+                  <Text style={styles.legendText}>No counter (bricks) × {stats.cNone}</Text>
+                </View>
+              </View>
+
+              {/* Play-cost curve */}
+              <Text style={styles.statH4}>Play-cost curve</Text>
+              {stats.curve.length ? (
+                stats.curve.map((b) => (
+                  <View key={b.cost} style={styles.curveRow}>
+                    <Text style={styles.curveLabel}>{b.cost}</Text>
+                    <View style={styles.curveTrack}>
+                      <View style={[styles.curveBar, { width: `${b.pct}%` }]} />
+                    </View>
+                    <Text style={styles.curveN}>{b.n}</Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.priceEmpty}>No costed cards.</Text>
+              )}
+
+              {/* Searchers */}
+              <Text style={styles.statH4}>Searchers</Text>
+              {!stats.searchers.length ? (
+                <Text style={styles.textMutedLine}>No searchers detected.</Text>
+              ) : (
+                <>
+                  <Text style={styles.textMutedLine}>
+                    {stats.searchers.length} searcher{stats.searchers.length === 1 ? '' : 's'} · {stats.searcherCopies}{' '}
+                    cop{stats.searcherCopies === 1 ? 'y' : 'ies'} · ~{Math.round(stats.openAccess * 100)}% to open one in
+                    your first 5 (with mulligan). Tap a row for targets.
+                  </Text>
+                  {stats.searchers.map((s) => {
+                    const dead = s.gate.status === 'dead';
+                    const situ = s.gate.status === 'situational';
+                    const pct = Math.round(s.live * 100);
+                    const flag = gateFlag(s.gate.status);
+                    const isExp = expanded === s.r.card_code;
+                    const label = searcherTargetLabel(s.meta.filters);
+                    return (
+                      <View key={s.r.card_code}>
+                        <Pressable
+                          style={styles.srow}
+                          onPress={() => setExpanded(isExp ? null : s.r.card_code)}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.srowName}>
+                              {isExp ? '▾' : '▸'} {s.c.name || s.r.card_code} ×{s.r.quantity}
+                              {flag ? <Text style={{ color: flag.color }}> {flag.text}</Text> : null}
+                            </Text>
+                            <Text style={styles.srowSub}>
+                              top {s.meta.look}
+                              {s.meta.take > 1 ? ` +up to ${s.meta.take}` : ''} · {s.T} {label}
+                            </Text>
+                          </View>
+                          <Text style={[styles.srowPct, { color: dead ? '#7a7280' : hitColor(pct) }]}>
+                            {dead ? '—' : `${pct}%${situ ? '*' : ''}`}
+                          </Text>
+                        </Pressable>
+                        {isExp ? (
+                          <Text style={styles.srowDetail}>
+                            Can hit:{' '}
+                            {s.hits.length
+                              ? s.hits.map((h) => `${h.name} ×${h.qty}`).join(' · ')
+                              : 'No matching cards in this deck.'}
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </>
+              )}
+            </>
+          )}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgPrimary },
@@ -1706,6 +1919,48 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.textPrimary,
     fontFamily: fonts.body,
+  },
+
+  // Deck stats modal
+  statHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, marginBottom: 8 },
+  statH4: {
+    color: colors.textSecondary,
+    fontFamily: fonts.serifBold,
+    fontSize: 12,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginTop: 22,
+    marginBottom: 10,
+  },
+  counterBar: { flexDirection: 'row', height: 14, borderRadius: 999, overflow: 'hidden', backgroundColor: colors.bgCard },
+  legend: { marginTop: 10, gap: 4 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  legendDot: { width: 10, height: 10, borderRadius: 3 },
+  legendText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
+  curveRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 5 },
+  curveLabel: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, width: 18, textAlign: 'center' },
+  curveTrack: { flex: 1, height: 12, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
+  curveBar: { height: '100%', backgroundColor: colors.accent, borderRadius: 999 },
+  curveN: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, width: 24, textAlign: 'right' },
+  textMutedLine: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, lineHeight: 18, marginBottom: 6 },
+  srow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  srowName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13 },
+  srowSub: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11, marginTop: 2 },
+  srowPct: { fontFamily: fonts.bodyBold, fontSize: 14, minWidth: 44, textAlign: 'right' },
+  srowDetail: {
+    color: colors.textMuted,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    lineHeight: 17,
+    paddingLeft: 16,
+    paddingBottom: 8,
   },
 
   importHint: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, lineHeight: 19, marginBottom: 12 },
