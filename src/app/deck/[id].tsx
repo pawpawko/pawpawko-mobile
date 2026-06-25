@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -28,6 +28,7 @@ import {
   capFor,
   fetchValidity,
   isBase,
+  leaderLocked,
   loadOwnedElsewhere,
   loadRules,
   lookupCards,
@@ -1001,6 +1002,39 @@ function Stepper({
   );
 }
 
+type Ability = '' | 'Blocker' | 'Rush' | 'Searcher';
+type Counter = '' | '1000' | '2000' | 'None';
+const CB_PAGE = 60; // render this many at a time
+const CB_FETCH = 300; // server page size
+
+function FilterRow({
+  label,
+  value,
+  options,
+  onPick,
+}: {
+  label: string;
+  value: string;
+  options: { label: string; value: string }[];
+  onPick: (v: string) => void;
+}) {
+  return (
+    <View style={styles.filterRow}>
+      <Text style={styles.filterLabel}>{label}</Text>
+      <View style={styles.filterPills}>
+        {options.map((opt) => (
+          <Pressable
+            key={opt.value}
+            onPress={() => onPick(opt.value)}
+            style={[styles.fpill, value === opt.value && styles.fpillActive]}>
+            <Text style={[styles.fpillText, value === opt.value && styles.fpillTextActive]}>{opt.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function AddCardsModal({
   visible,
   onClose,
@@ -1017,41 +1051,175 @@ function AddCardsModal({
   onAdd: (c: CardInfo) => void;
 }) {
   const [query, setQuery] = useState('');
-  const [rows, setRows] = useState<CardInfo[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [fType, setFType] = useState('');
+  const [fCost, setFCost] = useState<number | null>(null);
+  const [fAbility, setFAbility] = useState<Ability>('');
+  const [fCounter, setFCounter] = useState<Counter>('');
+  const [trait, setTrait] = useState('');
+  const [traitPool, setTraitPool] = useState<string[]>([]);
+  const [traitFocused, setTraitFocused] = useState(false);
 
-  const search = useCallback(async () => {
-    if (!leader) return;
-    setLoading(true);
-    const colorOr = String(leader.color ?? '')
-      .split('/')
-      .filter(Boolean)
-      .map((c) => `color.ilike.%${c}%`)
-      .join(',');
+  const [rows, setRows] = useState<CardInfo[]>([]);
+  const [shown, setShown] = useState(0);
+  const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errMsg, setErrMsg] = useState('');
+
+  // Paging cursors live in refs so the fetch loop sees current values without
+  // re-rendering; seq guards against a filter change landing a stale page.
+  const fromRef = useRef(0);
+  const doneRef = useRef(false);
+  const seqRef = useRef(0);
+  const rowsRef = useRef<CardInfo[]>([]);
+
+  const colorOr = useMemo(
+    () =>
+      String(leader?.color ?? '')
+        .split('/')
+        .filter(Boolean)
+        .map((c) => `color.ilike.%${c}%`)
+        .join(','),
+    [leader?.color],
+  );
+
+  // The query filter applies only on an exact trait (picked or fully typed),
+  // matching web activeTrait().
+  const activeTrait = useMemo(() => {
+    const typed = trait.trim();
+    if (!typed) return null;
+    return traitPool.find((t) => t.toLowerCase() === typed.toLowerCase()) ?? null;
+  }, [trait, traitPool]);
+
+  // Trait pool = traits with ≥1 addable card in this deck's legal pool, built
+  // once per deck+format when the modal opens (port of web ensureTraitPool).
+  const traitKeyRef = useRef('');
+  useEffect(() => {
+    if (!visible || !leader) return;
+    const key = `${deck.id}:${deck.format}`;
+    if (traitKeyRef.current === key) return;
+    traitKeyRef.current = key;
+    let cancelled = false;
+    (async () => {
+      const set = new Set<string>();
+      let from = 0;
+      while (from < 20000) {
+        let q = supabase
+          .from('cards')
+          .select('card_code,types')
+          .eq('game', GAME)
+          .neq('type', 'LEADER')
+          .not('types', 'is', null)
+          .range(from, from + 999);
+        if (colorOr) q = q.or(colorOr);
+        const { data, error } = await q;
+        if (error || !data || data.length === 0) break;
+        data.forEach((c: any) => {
+          if (
+            isBase(c.card_code) &&
+            capFor(c.card_code) !== 0 &&
+            (deck.format !== 'standard' || standardLegal(c.card_code))
+          ) {
+            (c.types ?? []).forEach((t: string) => set.add(t));
+          }
+        });
+        if (data.length < 1000) break;
+        from += 1000;
+      }
+      if (!cancelled) setTraitPool([...set].sort((a, b) => a.localeCompare(b)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, leader, deck.id, deck.format, colorOr]);
+
+  // Fetch one server page (filtered), append the legal subset to rowsRef.
+  const fetchChunk = useCallback(async (): Promise<string | null> => {
     let q = supabase
       .from('cards')
-      .select('card_code,name,color,cost,type,image_url')
+      .select('card_code,name,color,cost,type,image_url,counter,effect_text,types')
       .eq('game', GAME)
       .neq('type', 'LEADER')
       .order('release_order', { ascending: false })
-      .limit(120);
-    const term = query.trim();
-    if (term) q = q.or(`name.ilike.%${term}%,card_code.ilike.%${term}%`);
+      .range(fromRef.current, fromRef.current + CB_FETCH - 1);
+    const name = query.trim();
+    if (name) q = q.or(`name.ilike.%${name}%,card_code.ilike.%${name}%`);
+    if (fType) q = q.eq('type', fType);
+    if (activeTrait) q = q.contains('types', [activeTrait]);
+    if (fCost !== null) q = q.eq('cost', fCost);
+    // Ability filters key off effect-text conventions ([Blocker]/[Rush] keywords;
+    // searchers phrase as "look at … top of your deck … add … hand").
+    if (fAbility === 'Blocker') q = q.ilike('effect_text', '%[Blocker]%');
+    else if (fAbility === 'Rush') q = q.ilike('effect_text', '%[Rush]%');
+    else if (fAbility === 'Searcher')
+      q = q.ilike('effect_text', '%look at%top of your deck%').ilike('effect_text', '%add%hand%');
+    if (fCounter === 'None') q = q.is('counter', null);
+    else if (fCounter) q = q.eq('counter', Number(fCounter));
     if (colorOr) q = q.or(colorOr);
-    const { data } = await q;
-    const filtered = (data ?? []).filter(
-      (c: any) =>
-        isBase(c.card_code) && capFor(c.card_code) !== 0 && (deck.format !== 'standard' || standardLegal(c.card_code)),
+    const { data, error } = await q;
+    if (error) return error.message;
+    const batch = (data ?? []) as CardInfo[];
+    fromRef.current += batch.length;
+    if (batch.length < CB_FETCH) doneRef.current = true;
+    rowsRef.current = rowsRef.current.concat(
+      batch.filter(
+        (c) =>
+          isBase(c.card_code) &&
+          capFor(c.card_code) !== 0 &&
+          (deck.format !== 'standard' || standardLegal(c.card_code)),
+      ),
     );
-    setRows(filtered.slice(0, 60));
-    setLoading(false);
-  }, [leader, query, deck.format]);
+    return null;
+  }, [query, fType, activeTrait, fCost, fAbility, fCounter, colorOr, deck.format]);
 
+  const load = useCallback(async () => {
+    if (!leader) return;
+    const seq = ++seqRef.current;
+    rowsRef.current = [];
+    fromRef.current = 0;
+    doneRef.current = false;
+    setLoading(true);
+    setErrMsg('');
+    setRows([]);
+    setShown(0);
+    setDone(false);
+    while (rowsRef.current.length < CB_PAGE && !doneRef.current) {
+      const err = await fetchChunk();
+      if (seq !== seqRef.current) return; // filters changed mid-flight
+      if (err) {
+        setErrMsg(err);
+        setLoading(false);
+        return;
+      }
+    }
+    if (seq !== seqRef.current) return;
+    setRows(rowsRef.current.slice());
+    setShown(Math.min(CB_PAGE, rowsRef.current.length));
+    setDone(doneRef.current);
+    setLoading(false);
+  }, [leader, fetchChunk]);
+
+  const loadMore = useCallback(async () => {
+    const seq = seqRef.current;
+    while (rowsRef.current.length < shown + CB_PAGE && !doneRef.current) {
+      const err = await fetchChunk();
+      if (seq !== seqRef.current) return;
+      if (err) break;
+    }
+    if (seq !== seqRef.current) return;
+    setRows(rowsRef.current.slice());
+    setShown((s) => Math.min(s + CB_PAGE, rowsRef.current.length));
+    setDone(doneRef.current);
+  }, [shown, fetchChunk]);
+
+  // Debounced reload whenever the modal opens or any filter changes.
   useEffect(() => {
     if (!visible) return;
-    const t = setTimeout(search, 250);
+    const t = setTimeout(load, 250);
     return () => clearTimeout(t);
-  }, [visible, search]);
+  }, [visible, load]);
+
+  const renderRows = rows.slice(0, shown);
+  const hasMore = shown < rows.length || !done;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -1062,28 +1230,121 @@ function AddCardsModal({
             <Ionicons name="close" size={26} color={colors.textPrimary} />
           </Pressable>
         </View>
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search cards by name or code"
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-          style={styles.input}
-        />
-        {loading ? <ActivityIndicator color={colors.accent} style={{ marginTop: 16 }} /> : null}
-        <ScrollView contentContainerStyle={styles.addGrid} keyboardShouldPersistTaps="handled">
-          {rows.map((c) => {
-            const inDeck = cards.find((r) => r.card_code === c.card_code);
-            return (
-              <Pressable key={c.card_code} style={styles.addCardTile} onPress={() => onAdd(c)}>
-                <Image source={{ uri: c.image_url ?? undefined }} style={styles.addCardImg} contentFit="cover" />
-                <Text style={styles.addCardName} numberOfLines={1}>
-                  {c.name}
-                  {inDeck ? <Text style={{ color: '#7ec96a' }}> x{inDeck.quantity}</Text> : null}
-                </Text>
-              </Pressable>
-            );
-          })}
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 32 }}>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search cards by name or code"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            style={styles.input}
+          />
+
+          <View style={styles.traitWrap}>
+            <TextInput
+              value={trait}
+              onChangeText={setTrait}
+              onFocus={() => setTraitFocused(true)}
+              onBlur={() => setTraitFocused(false)}
+              placeholder="Type trait (e.g. Straw Hat Crew)"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              style={[styles.input, { marginTop: 8 }]}
+            />
+            {traitFocused && trait.trim() && !activeTrait ? (
+              <View style={styles.traitList}>
+                {traitPool
+                  .filter((t) => t.toLowerCase().includes(trait.trim().toLowerCase()))
+                  .slice(0, 8)
+                  .map((t) => (
+                    <Pressable
+                      key={t}
+                      onPress={() => {
+                        setTrait(t);
+                        setTraitFocused(false);
+                      }}
+                      style={styles.traitItem}>
+                      <Text style={styles.traitItemText}>{t}</Text>
+                    </Pressable>
+                  ))}
+              </View>
+            ) : null}
+          </View>
+
+          <FilterRow
+            label="Type"
+            value={fType}
+            onPick={setFType}
+            options={[
+              { label: 'Any', value: '' },
+              { label: 'Character', value: 'CHARACTER' },
+              { label: 'Event', value: 'EVENT' },
+              { label: 'Stage', value: 'STAGE' },
+            ]}
+          />
+          <FilterRow
+            label="Ability"
+            value={fAbility}
+            onPick={(v) => setFAbility(v as Ability)}
+            options={[
+              { label: 'Any', value: '' },
+              { label: 'Blocker', value: 'Blocker' },
+              { label: 'Rush', value: 'Rush' },
+              { label: 'Searcher', value: 'Searcher' },
+            ]}
+          />
+          <FilterRow
+            label="Counter"
+            value={fCounter}
+            onPick={(v) => setFCounter(v as Counter)}
+            options={[
+              { label: 'Any', value: '' },
+              { label: '+1000', value: '1000' },
+              { label: '+2000', value: '2000' },
+              { label: 'None', value: 'None' },
+            ]}
+          />
+          <FilterRow
+            label="Cost"
+            value={fCost === null ? '' : String(fCost)}
+            onPick={(v) => setFCost(v === '' ? null : Number(v))}
+            options={[
+              { label: 'Any', value: '' },
+              ...Array.from({ length: 11 }, (_, i) => ({ label: String(i), value: String(i) })),
+            ]}
+          />
+
+          {errMsg ? <Text style={styles.err}>{errMsg}</Text> : null}
+          <Text style={styles.cbCount}>
+            {loading ? 'Loading…' : renderRows.length ? `${shown}${hasMore ? '+' : ''} cards` : 'No legal cards match.'}
+          </Text>
+
+          <View style={styles.addGrid}>
+            {renderRows.map((c) => {
+              const inDeck = cards.find((r) => r.card_code === c.card_code);
+              const locked = leaderLocked(c.effect_text, leader);
+              return (
+                <Pressable
+                  key={c.card_code}
+                  style={[styles.addCardTile, locked && styles.cbLocked]}
+                  onPress={() => onAdd(c)}
+                  accessibilityHint={
+                    locked ? "Leader-locked — this card's effect needs a different leader. Still legal to add." : undefined
+                  }>
+                  <Image source={{ uri: c.image_url ?? undefined }} style={styles.addCardImg} contentFit="cover" />
+                  <Text style={styles.addCardName} numberOfLines={1}>
+                    {c.name}
+                    {inDeck ? <Text style={{ color: '#7ec96a' }}> x{inDeck.quantity}</Text> : null}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {hasMore && !loading && renderRows.length > 0 ? (
+            <Pressable style={styles.cbMore} onPress={loadMore}>
+              <Text style={styles.cbMoreText}>Load more</Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
       </View>
     </Modal>
@@ -1345,6 +1606,46 @@ const styles = StyleSheet.create({
   addTitle: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 18 },
   addGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingVertical: 14 },
   addCardTile: { width: '30%' },
+  cbLocked: { opacity: 0.4 }, // leader-locked — greyed but still addable
   addCardImg: { width: '100%', aspectRatio: 0.72, borderRadius: 6 },
   addCardName: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 11, marginTop: 4 },
+
+  traitWrap: { position: 'relative', zIndex: 10 },
+  traitList: {
+    backgroundColor: colors.bgCard,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+  traitItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
+  traitItemText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13 },
+
+  filterRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 12 },
+  filterLabel: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 11, width: 56, paddingTop: 7 },
+  filterPills: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  fpill: {
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgCard,
+  },
+  fpillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  fpillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
+  fpillTextActive: { color: colors.bgPrimary, fontFamily: fonts.bodyBold },
+
+  cbCount: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 14 },
+  cbMore: {
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingHorizontal: 24,
+    paddingVertical: 11,
+    marginTop: 8,
+  },
+  cbMoreText: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 1 },
 });
