@@ -9,6 +9,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -27,11 +28,13 @@ import {
   Validity,
   capFor,
   fetchValidity,
+  formatDecklist,
   isBase,
   leaderLocked,
   loadOwnedElsewhere,
   loadRules,
   lookupCards,
+  parseDecklist,
   standardLegal,
 } from '@/lib/decks';
 import { supabase } from '@/lib/supabase';
@@ -94,6 +97,12 @@ export default function DeckEditorScreen() {
   const [showMissing, setShowMissing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [err, setErr] = useState('');
+
+  // Decklist import (paste NxCODE lines → merge into this deck)
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const infoRef = useRef(info);
   infoRef.current = info;
 
@@ -556,6 +565,55 @@ export default function DeckEditorScreen() {
     await reloadCards(deck.id);
   }
 
+  // Export the current deck as NxCODE text (leader as a 1x line) via the native
+  // share sheet (which offers Copy). Mirrors web formatDecklist export.
+  async function exportList() {
+    if (!deck) return;
+    try {
+      await Share.share({ message: formatDecklist(deck.leader_card_code, cards, info) });
+    } catch {}
+  }
+
+  // Import a pasted NxCODE list and merge it into this deck. The leader line is
+  // ignored (leader is fixed here); each card is set to its listed quantity
+  // (clamped to the copy cap). Cards the gatekeeper rejects (wrong color / ban /
+  // rotation) are reported, not silently dropped.
+  async function doImport() {
+    if (!deck) return;
+    setImportBusy(true);
+    setImportMsg(null);
+    const { rows: parsed, errors } = parseDecklist(importText);
+    parsed.delete(deck.leader_card_code);
+    let added = 0;
+    const failed: string[] = [];
+    for (const [code, qtyRaw] of parsed) {
+      const cap = capFor(code);
+      if (cap === 0) {
+        failed.push(code); // banned
+        continue;
+      }
+      const qty = cap != null ? Math.min(qtyRaw, cap) : qtyRaw;
+      const existing = cards.find((r) => r.card_code === code);
+      const { error } = existing
+        ? await supabase
+            .from('deck_cards')
+            .update({ quantity: qty, owned: Math.min(existing.owned, qty) })
+            .eq('deck_id', deck.id)
+            .eq('card_code', code)
+        : await supabase.from('deck_cards').insert({ deck_id: deck.id, card_code: code, quantity: qty });
+      if (error) failed.push(code);
+      else added++;
+    }
+    await reloadCards(deck.id);
+    setImportBusy(false);
+    const parts = [`Imported ${added} card${added === 1 ? '' : 's'}.`];
+    if (errors.length) parts.push(`${errors.length} line${errors.length === 1 ? '' : 's'} unreadable.`);
+    if (failed.length)
+      parts.push(`${failed.length} not legal here: ${failed.slice(0, 6).join(', ')}${failed.length > 6 ? '…' : ''}.`);
+    setImportMsg(parts.join(' '));
+    if (added && !failed.length && !errors.length) setImportText('');
+  }
+
   async function setFormat(fmt: 'standard' | 'eternal') {
     if (!deck || deck.format === fmt) return;
     setErr('');
@@ -697,6 +755,19 @@ export default function DeckEditorScreen() {
               {/* Cost to Finish — price of the cards still needed */}
               <Pressable onPress={() => openPrices('finish')} style={styles.statsBtn} accessibilityLabel="Cost to finish">
                 <Ionicons name="cash-outline" size={18} color={colors.textSecondary} />
+              </Pressable>
+              {/* Export / import decklist (NxCODE) */}
+              <Pressable onPress={exportList} style={styles.statsBtn} accessibilityLabel="Export decklist">
+                <Ionicons name="share-outline" size={18} color={colors.textSecondary} />
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setImportMsg(null);
+                  setImportOpen(true);
+                }}
+                style={styles.statsBtn}
+                accessibilityLabel="Import decklist">
+                <Ionicons name="download-outline" size={18} color={colors.textSecondary} />
               </Pressable>
             </View>
           </View>
@@ -897,6 +968,42 @@ export default function DeckEditorScreen() {
         cards={cards}
         onAdd={addCard}
       />
+
+      <Modal visible={importOpen} animationType="slide" onRequestClose={() => setImportOpen(false)}>
+        <View style={styles.addModal}>
+          <View style={styles.addHeader}>
+            <Text style={styles.addTitle}>Import decklist</Text>
+            <Pressable onPress={() => setImportOpen(false)} style={{ padding: 6 }}>
+              <Ionicons name="close" size={26} color={colors.textPrimary} />
+            </Pressable>
+          </View>
+          <Text style={styles.importHint}>
+            Paste NxCODE lines (e.g. “4xOP01-016”). The leader line is ignored; cards merge into this deck and are
+            clamped to the copy cap.
+          </Text>
+          <TextInput
+            value={importText}
+            onChangeText={setImportText}
+            placeholder={'4xOP01-016\n3xOP01-024'}
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            multiline
+            style={styles.importInput}
+          />
+          {importMsg ? <Text style={styles.partnerMsg}>{importMsg}</Text> : null}
+          <Pressable
+            disabled={importBusy || !importText.trim()}
+            onPress={doImport}
+            style={[styles.partnerBtn, { marginTop: 12 }, (importBusy || !importText.trim()) && { opacity: 0.4 }]}>
+            {importBusy ? (
+              <ActivityIndicator color={colors.bgPrimary} />
+            ) : (
+              <Text style={styles.partnerBtnText}>Import</Text>
+            )}
+          </Pressable>
+        </View>
+      </Modal>
 
       <Modal visible={priceOpen} animationType="slide" onRequestClose={() => setPriceOpen(false)}>
         <View style={styles.priceModal}>
@@ -1597,6 +1704,20 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     padding: 12,
     fontSize: 15,
+    color: colors.textPrimary,
+    fontFamily: fonts.body,
+  },
+
+  importHint: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  importInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgCard,
+    borderRadius: radius.sm,
+    padding: 12,
+    minHeight: 160,
+    textAlignVertical: 'top',
+    fontSize: 14,
     color: colors.textPrimary,
     fontFamily: fonts.body,
   },
