@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -26,7 +26,15 @@ import {
   listTradeBinders,
   type TradeBinder,
 } from '@/lib/binders';
-import { lookupCards, normalizeCode, scanForCard, scanForCards, type ScannedCard } from '@/lib/cardScan';
+import { CardScanner } from '@/components/card-scanner';
+import {
+  extractCardCodes,
+  lookupCards,
+  normalizeCode,
+  scanForCard,
+  scanForCards,
+  type ScannedCard,
+} from '@/lib/cardScan';
 import { suffixFromSlug } from '@/lib/slug';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
@@ -95,6 +103,17 @@ export default function ScanScreen() {
   const [tray, setTray] = useState<{ card: ScannedCard; quantity: number }[]>([]);
   const [trayOpen, setTrayOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
+
+  // Live-OCR (card scope) plumbing. Refs keep the VisionCamera frame callback
+  // stable so its worklet never closes over stale state. seenCodes throttles DB
+  // lookups so a card held in frame is resolved once, not every frame.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const liveBusyRef = useRef(false);
+  const seenCodesRef = useRef<Set<string>>(new Set());
+  const livePaused = scanned !== null || pickerOpen || trayOpen;
+  const livePausedRef = useRef(livePaused);
+  livePausedRef.current = livePaused;
 
   if (!permission) {
     return (
@@ -223,6 +242,27 @@ export default function ScanScreen() {
     });
   }
 
+  // Live OCR text from the VisionCamera frame stream → card codes → DB lookup →
+  // route by mode (CARD opens the result sheet; PAGE drops into the tray).
+  // Stable identity (reads refs) so the frame worklet stays valid across renders.
+  const onLiveText = useCallback(async (text: string) => {
+    if (liveBusyRef.current || livePausedRef.current) return;
+    const codes = extractCardCodes(text).filter((c) => !seenCodesRef.current.has(c));
+    if (codes.length === 0) return;
+    liveBusyRef.current = true;
+    try {
+      const found = await lookupCards(codes);
+      // Mark every code we attempted (hits and misses) so a card sitting in
+      // frame isn't re-queried each frame.
+      codes.forEach((c) => seenCodesRef.current.add(c));
+      if (found.length === 0) return;
+      if (modeRef.current === 'page') mergeIntoTray(found);
+      else setScanned(found[0]);
+    } finally {
+      liveBusyRef.current = false;
+    }
+  }, []);
+
   function setTrayQty(cardCode: string, next: number) {
     setTray((prev) =>
       prev.flatMap((t) =>
@@ -335,6 +375,7 @@ export default function ScanScreen() {
     setAddMsg(null);
     setPickerOpen(false);
     setQty(1);
+    seenCodesRef.current.clear();
   }
 
   function switchMode(m: Mode) {
@@ -346,13 +387,17 @@ export default function ScanScreen() {
 
   return (
     <View style={styles.flex}>
-      <CameraView
-        ref={cameraRef}
-        style={StyleSheet.absoluteFill}
-        facing="back"
-        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-        onBarcodeScanned={mode === 'qr' ? ({ data }) => onScan(data) : undefined}
-      />
+      {scope === 'card' ? (
+        <CardScanner paused={livePaused} onText={onLiveText} />
+      ) : (
+        <CameraView
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+          onBarcodeScanned={mode === 'qr' ? ({ data }) => onScan(data) : undefined}
+        />
+      )}
 
       <SafeAreaView style={styles.overlay} pointerEvents="box-none">
         {/* Top group: close + title + mode toggle */}
@@ -393,14 +438,28 @@ export default function ScanScreen() {
             {mode === 'qr'
               ? 'Point at a Pawpaw Ko binder QR or Trade Tap code'
               : mode === 'card'
-                ? 'Fill the frame with a One Piece card, then tap to scan'
-                : 'Fit a binder page in the frame, then tap — cards drop into the tray'}
+                ? 'Hold a One Piece card steady — it scans automatically'
+                : 'Pan across the binder page — cards drop into the tray'}
           </Text>
         </View>
 
         {/* Bottom group: QR error banner OR card shutter */}
         <View style={styles.bottom}>
-          {mode === 'qr' ? (
+          {scope === 'card' ? (
+            // Live auto-scan: no shutter. Tray access in PAGE mode.
+            <View style={styles.shutterRow}>
+              <View style={styles.trayBtnSpacer} />
+              {mode === 'page' && tray.length > 0 ? (
+                <Pressable style={styles.trayBtn} onPress={() => setTrayOpen(true)}>
+                  <Ionicons name="albums" size={18} color={colors.bgPrimary} />
+                  <Text style={styles.trayBtnText}>{tray.length}</Text>
+                </Pressable>
+              ) : (
+                <Text style={styles.liveHint}>Auto-scanning…</Text>
+              )}
+              <View style={styles.trayBtnSpacer} />
+            </View>
+          ) : mode === 'qr' ? (
             error ? (
               <View style={styles.errorBanner}>
                 <Text style={styles.errorText}>{error}</Text>
@@ -752,6 +811,7 @@ const styles = StyleSheet.create({
   trayBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.accent, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.lg },
   trayBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 15 },
   trayBtnSpacer: { width: 58 },
+  liveHint: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
 
   trayBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   traySheet: { backgroundColor: colors.bgPrimary, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: 16, paddingBottom: 28, maxHeight: '85%' },
