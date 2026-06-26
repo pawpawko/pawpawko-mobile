@@ -27,6 +27,7 @@ export type CardInfo = {
   name: string | null;
   color: string | null;
   cost: number | null;
+  life?: number | null;
   type: string | null;
   types?: string[] | null;
   counter?: number | null;
@@ -124,7 +125,7 @@ export async function lookupCards(codes: string[]): Promise<Record<string, CardI
   for (let i = 0; i < codes.length; i += 100) {
     const { data } = await supabase
       .from('cards')
-      .select('card_code,name,color,cost,type,types,counter,effect_text,attribute,image_url,image_url_lg')
+      .select('card_code,name,color,cost,life,type,types,counter,effect_text,attribute,image_url,image_url_lg')
       .eq('game', GAME)
       .in('card_code', codes.slice(i, i + 100));
     (data ?? []).forEach((c: any) => {
@@ -154,6 +155,7 @@ export type SearcherFilter = {
   category?: string;
   traits?: string[];
   colors?: string[];
+  trigger?: boolean;
   names?: string[];
   exclude?: string[];
   cost?: SearcherCost;
@@ -167,12 +169,23 @@ export type SearcherMeta = {
   gate: string | null;
 };
 
+// A card HAS a [Trigger] keyword (vs. merely referencing one — searchers and
+// recursion say "… a card with a [Trigger]" / "… and a [Trigger] …"). Strip
+// those reference phrases first, then look for a remaining [Trigger] keyword.
+export function hasTrigger(effect: string | null | undefined): boolean {
+  return /\[Trigger\]/i.test(String(effect ?? '').replace(/(?:with|and)\s+an?\s+\[Trigger\]/gi, ''));
+}
+
 function parseSearcherSub(input: string): SearcherFilter {
   const s = input.replace(/\s+/g, ' ').trim();
   const f: SearcherFilter = {};
   const excl = [...s.matchAll(/other than \[([^\]]+)\]/gi)].map((x) => x[1]);
   const rest = s.replace(/other than \[[^\]]+\]/gi, ' ');
-  const names = [...rest.matchAll(/\[([^\]]+)\]/g)].map((x) => x[1]);
+  // "[Trigger]" is a keyword ("a card with a [Trigger]"), not a card name —
+  // matched against each candidate's effect text in cardMatchesSub.
+  const allNames = [...rest.matchAll(/\[([^\]]+)\]/g)].map((x) => x[1]);
+  const trigger = allNames.some((n) => /^trigger$/i.test(n));
+  const names = allNames.filter((n) => !/^trigger$/i.test(n));
   const traits = [...s.matchAll(/\{([^}]+)\}/g)]
     .map((x) => x[1])
     .concat([...s.matchAll(/type including "([^"]+)"/gi)].map((x) => x[1]));
@@ -205,6 +218,7 @@ function parseSearcherSub(input: string): SearcherFilter {
   if (category) f.category = category;
   if (traits.length) f.traits = traits;
   if (colors.length) f.colors = colors;
+  if (trigger) f.trigger = true;
   if (names.length) f.names = names;
   if (excl.length) f.exclude = excl;
   if (cost) f.cost = cost;
@@ -270,6 +284,7 @@ export function cardMatchesSub(ci: CardInfo, f: SearcherFilter): boolean {
     const cc = (ci.color || '').toLowerCase();
     id.push(f.colors.some((col) => cc.includes(col)));
   }
+  if (f.trigger) id.push(hasTrigger(ci.effect_text));
   if (id.length && !id.some(Boolean)) return false; // identity constraints are OR'd
   if (f.category && ci.type !== f.category) return false;
   if (f.cost) {
@@ -291,6 +306,7 @@ export function searcherTargetLabel(filters: SearcherFilter[]): string {
       if (f.names) p.push(f.names.map((n) => '[' + n + ']').join('/'));
       if (f.traits) p.push(f.traits.map((t) => '{' + t + '}').join('/'));
       if (f.colors) p.push(f.colors.join('/'));
+      if (f.trigger) p.push('[Trigger]');
       if (f.category) p.push(f.category[0] + f.category.slice(1).toLowerCase());
       if (f.cost)
         p.push(

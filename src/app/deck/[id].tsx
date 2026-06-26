@@ -34,6 +34,7 @@ import {
   formatDecklist,
   hitChance,
   isBase,
+  hasTrigger,
   leaderLocked,
   loadOwnedElsewhere,
   loadRules,
@@ -692,6 +693,7 @@ export default function DeckEditorScreen() {
   });
   const selectedRow = cards.find((r) => r.card_code === selected) ?? null;
   const total = validity?.total_cards ?? 0;
+  const deckValid = !!validity?.valid;
   const publishable = !!(validity?.valid && validity?.owned_complete);
   const missingCount = validity?.missing_cards ?? 0;
   const art = leaderArts[artIdx];
@@ -756,7 +758,14 @@ export default function DeckEditorScreen() {
                 </>
               ) : null}
               {/* Stats — counters / cost curve / searcher hit-rates */}
-              <Pressable onPress={() => setStatsOpen(true)} style={styles.statsBtn} accessibilityLabel="Deck stats">
+              <Pressable
+                onPress={() => setStatsOpen(true)}
+                disabled={!deckValid}
+                style={[styles.statsBtn, !deckValid && { opacity: 0.4 }]}
+                accessibilityLabel="Deck stats"
+                accessibilityHint={
+                  deckValid ? undefined : 'Deck must be valid (50 legal cards) before stats are available'
+                }>
                 <Ionicons name="stats-chart-outline" size={18} color={colors.textSecondary} />
               </Pressable>
               {/* Cost to Finish — price of the cards still needed */}
@@ -976,7 +985,7 @@ export default function DeckEditorScreen() {
         onAdd={addCard}
       />
 
-      <StatsModal visible={statsOpen} onClose={() => setStatsOpen(false)} cards={cards} info={info} leader={leader} />
+      <StatsModal visible={statsOpen && deckValid} onClose={() => setStatsOpen(false)} cards={cards} info={info} leader={leader} />
 
       <Modal visible={importOpen} animationType="slide" onRequestClose={() => setImportOpen(false)}>
         <View style={styles.addModal}>
@@ -1494,6 +1503,7 @@ function StatsModal({
   leader: CardInfo | null;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [trigOpen, setTrigOpen] = useState(false);
 
   const stats = useMemo(() => {
     let c2000 = 0;
@@ -1553,7 +1563,19 @@ function StatsModal({
     // OPTCG gives a free mulligan (redraw all 5 once) → two shots at it.
     const openAccess = searchers.length ? 1 - (1 - openRaw) * (1 - openRaw) : 0;
 
-    return { c2000, c1000, cNone, total, curve, searchers, searcherCopies, openAccess };
+    // Triggers — [Trigger] cards can act when dealt to you from your Life. A
+    // leader's "cost" column is its Life value; Life is drawn from the 50, so
+    // chance-in-life is hypergeometric (the same hitChance used for searchers).
+    const trigHits = cards
+      .filter((r) => hasTrigger(info[r.card_code]?.effect_text))
+      .map((r) => ({ name: info[r.card_code]?.name || r.card_code, qty: r.quantity }))
+      .sort((a, b) => b.qty - a.qty);
+    const trigCount = trigHits.reduce((s, h) => s + h.qty, 0); // qty-weighted: counts each card's copies
+    const life = leader?.life ?? leader?.cost ?? 5;
+    const trigInLife = hitChance(total, trigCount, life);
+    const expTrig = total ? (trigCount * life) / total : 0;
+
+    return { c2000, c1000, cNone, total, curve, searchers, searcherCopies, openAccess, trigCount, trigHits, life, trigInLife, expTrig };
   }, [cards, info, leader]);
 
   return (
@@ -1596,6 +1618,29 @@ function StatsModal({
                   <Text style={styles.legendText}>No counter (bricks) × {stats.cNone}</Text>
                 </View>
               </View>
+
+              {/* Triggers — act when taken from your Life (tap to list the cards) */}
+              <Text style={styles.statH4}>Triggers</Text>
+              {stats.trigCount ? (
+                <>
+                  <Pressable onPress={() => setTrigOpen((v) => !v)}>
+                    <Text style={styles.textMutedLine}>
+                      {trigOpen ? '▾' : '▸'} {stats.trigCount} [Trigger] card{stats.trigCount === 1 ? '' : 's'} ·{' '}
+                      <Text style={{ color: hitColor(Math.round(stats.trigInLife * 100)) }}>
+                        {Math.round(stats.trigInLife * 100)}%
+                      </Text>{' '}
+                      chance ≥1 starts in Life · ~{stats.expTrig.toFixed(1)} expected in your {stats.life} Life
+                    </Text>
+                  </Pressable>
+                  {trigOpen ? (
+                    <Text style={[styles.srowDetail, { paddingLeft: 16 }]}>
+                      {stats.trigHits.map((h) => `${h.name} ×${h.qty}`).join(' · ')}
+                    </Text>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.textMutedLine}>No [Trigger] cards in the deck.</Text>
+              )}
 
               {/* Play-cost curve */}
               <Text style={styles.statH4}>Play-cost curve</Text>
