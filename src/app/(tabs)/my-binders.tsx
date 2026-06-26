@@ -183,30 +183,8 @@ export default function MyBindersScreen() {
               tintColor={colors.accent}
             />
           }>
-          <Pressable
-            style={({ pressed }) => ({
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              alignSelf: 'center',
-              paddingHorizontal: 16,
-              paddingVertical: 10,
-              marginBottom: 12,
-              borderRadius: radius.sm,
-              borderWidth: 1,
-              borderColor: colors.borderAccent,
-              opacity: pressed ? 0.7 : 1,
-            })}
-            onPress={() => setNewOpen(true)}
-            accessibilityLabel="New binder">
-            <Ionicons name="add" size={18} color={colors.accent} />
-            <Text style={{ color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 }}>
-              NEW BINDER
-            </Text>
-          </Pressable>
           {groups.length === 0 ? (
-            <Text style={styles.empty}>No binders yet — tap &ldquo;New binder&rdquo; above to create one.</Text>
+            <Text style={styles.empty}>No binders yet — tap the + button to create one.</Text>
           ) : (
             groups.map(({ game, data }) => (
               <GameSection
@@ -220,6 +198,13 @@ export default function MyBindersScreen() {
           )}
         </ScrollView>
       )}
+
+      <Pressable
+        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+        onPress={() => setNewOpen(true)}
+        accessibilityLabel="New binder">
+        <Ionicons name="add" size={32} color={colors.bgPrimary} />
+      </Pressable>
 
       <NewBinderModal
         visible={newOpen}
@@ -245,12 +230,27 @@ function GameSection({
   counts: Record<string, number>;
   onOpen: (id: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   return (
     <View style={styles.groupWrap}>
-      <Text style={styles.groupTitle}>{GAME_LABEL[game].toUpperCase()}</Text>
-      {binders.map((b) => (
-        <BinderCard key={b.id} binder={b} count={counts[b.id] ?? 0} onPress={() => onOpen(b.id)} />
-      ))}
+      <Pressable
+        onPress={() => setCollapsed((c) => !c)}
+        style={({ pressed }) => [styles.groupHeader, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+        accessibilityLabel={`${collapsed ? 'Expand' : 'Collapse'} ${GAME_LABEL[game]}`}>
+        <Ionicons
+          name={collapsed ? 'chevron-forward' : 'chevron-down'}
+          size={16}
+          color={colors.textSecondary}
+        />
+        <Text style={styles.groupTitle}>{GAME_LABEL[game].toUpperCase()}</Text>
+        <Text style={styles.groupCount}>{binders.length}</Text>
+      </Pressable>
+      {collapsed
+        ? null
+        : binders.map((b) => (
+            <BinderCard key={b.id} binder={b} count={counts[b.id] ?? 0} onPress={() => onOpen(b.id)} />
+          ))}
     </View>
   );
 }
@@ -450,20 +450,52 @@ function PillRow({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
-  scrollContent: { paddingBottom: 32 },
+  scrollContent: { paddingBottom: 96 },
   empty: { textAlign: 'center', marginTop: 48, color: colors.textMuted, fontFamily: fonts.body },
+
+  // Floating "new binder" button — pinned to the bottom of the screen, above
+  // the tab bar.
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 6,
+  },
+  fabPressed: { backgroundColor: colors.accentLight },
 
   // ---- Game section ----
   groupWrap: { paddingHorizontal: 16, paddingTop: 24 },
-  groupTitle: {
-    fontFamily: fonts.serif,
-    fontSize: 12,
-    letterSpacing: 3,
-    color: colors.textSecondary,
+  groupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingBottom: 8,
     marginBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  groupTitle: {
+    flex: 1,
+    fontFamily: fonts.serif,
+    fontSize: 12,
+    letterSpacing: 3,
+    color: colors.textSecondary,
+  },
+  groupCount: {
+    fontFamily: fonts.serif,
+    fontSize: 12,
+    letterSpacing: 1,
+    color: colors.textMuted,
   },
 
   // ---- Binder card ----

@@ -27,7 +27,8 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA"
       ]
     },
     "web": {
@@ -59,6 +60,13 @@
         }
       ],
       "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Pawpaw Ko needs your camera to scan cards, binder QR codes, and Trade Tap codes.",
+          "recordAudioAndroid": false
+        }
+      ],
       [
         "expo-build-properties",
         {

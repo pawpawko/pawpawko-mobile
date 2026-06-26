@@ -14,6 +14,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AutoSearchSheet } from '@/components/auto-search-sheet';
+import { BookOpenIcon, CardsIcon } from '@/components/tab-icons';
 import { useAutoSearch } from '@/lib/auto-search-context';
 import { colors, fonts } from '@/lib/theme';
 
@@ -144,14 +145,14 @@ export default function TabsLayout() {
           name="my-binders"
           options={{
             title: '',
-            tabBarIcon: ({ color, size }) => <Ionicons name="albums-outline" size={size} color={color} />,
+            tabBarIcon: ({ color, size }) => <BookOpenIcon color={color} size={size} />,
           }}
         />
         <Tabs.Screen
           name="decks"
           options={{
             title: '',
-            tabBarIcon: ({ color, size }) => <Ionicons name="layers-outline" size={size} color={color} />,
+            tabBarIcon: ({ color, size }) => <CardsIcon color={color} size={size} />,
           }}
         />
         <Tabs.Screen

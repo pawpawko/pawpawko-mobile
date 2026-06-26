@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -248,6 +248,23 @@ export default function ProfileScreen() {
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Pressable
+              onPress={() => router.push('/notifications')}
+              style={({ pressed }) => ({ paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
+              accessibilityLabel="Notifications">
+              <Ionicons name="notifications-outline" size={24} color={colors.accent} />
+              {unread > 0 ? (
+                <View style={styles.headerBadge}>
+                  <Text style={styles.headerBadgeText}>{unread > 9 ? '9+' : String(unread)}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          ),
+        }}
+      />
       <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.welcome}>Welcome back{originalName ? `, ${originalName}` : ''}</Text>
         <Text style={styles.email}>{session?.user.email}</Text>
@@ -362,32 +379,6 @@ export default function ProfileScreen() {
         </Pressable>
 
         <View style={styles.divider} />
-
-        <Pressable
-          style={({ pressed }) => [styles.tradeTapBtn, pressed && styles.tradeTapBtnPressed]}
-          onPress={() => router.push('/notifications')}>
-          <Ionicons name="notifications-outline" size={18} color={colors.bgPrimary} />
-          <Text style={styles.tradeTapBtnText}>NOTIFICATIONS</Text>
-          {unread > 0 ? (
-            <View
-              style={{
-                position: 'absolute',
-                top: -6,
-                right: -6,
-                minWidth: 18,
-                height: 18,
-                borderRadius: 9,
-                paddingHorizontal: 4,
-                backgroundColor: colors.danger,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}>
-              <Text style={{ color: '#fff', fontSize: 10, fontFamily: fonts.bodyBold }}>
-                {unread > 9 ? '9+' : String(unread)}
-              </Text>
-            </View>
-          ) : null}
-        </Pressable>
 
         <Pressable
           style={({ pressed }) => [styles.tradeTapBtn, pressed && styles.tradeTapBtnPressed]}
@@ -603,4 +594,18 @@ const styles = StyleSheet.create({
   },
   signOutPressed: { backgroundColor: colors.bgCard },
   signOutText: { color: colors.danger, fontFamily: fonts.serifBold, letterSpacing: 2 },
+
+  headerBadge: {
+    position: 'absolute',
+    top: -4,
+    right: 6,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerBadgeText: { color: '#fff', fontSize: 9, fontFamily: fonts.bodyBold },
 });
