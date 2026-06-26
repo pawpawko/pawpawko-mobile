@@ -58,7 +58,15 @@
           "iosUrlScheme": "com.googleusercontent.apps.132449239636-prjaaehu0und1bpts6btsml7akujp4nr"
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
