@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
@@ -88,7 +87,6 @@ export default function ScanScreen() {
   const [error, setError] = useState<string | null>(null);
 
   // Card-scan (OCR) state.
-  const [busy, setBusy] = useState(false);
   const [scanned, setScanned] = useState<ScannedCard | null>(null);
   const [noMatch, setNoMatch] = useState<string | null>(null);
   const [addMsg, setAddMsg] = useState<string | null>(null);
@@ -161,70 +159,6 @@ export default function ScanScreen() {
         lockedRef.current = false;
         setError(null);
       }, 2500);
-    }
-  }
-
-  // ---- Card mode (capture-still → on-device OCR) ----
-  async function captureCard() {
-    if (busy || !cameraRef.current) return;
-    setBusy(true);
-    setNoMatch(null);
-    setAddMsg(null);
-    try {
-      // No skipProcessing: let the OS fix orientation so OCR reads upright text.
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.6 });
-      if (!photo?.uri) {
-        setNoMatch('Could not capture — try again');
-        return;
-      }
-      const ocr = await TextRecognition.recognize(photo.uri);
-      const { card, codes } = await scanForCard(ocr.text);
-      if (card) {
-        setScanned(card);
-      } else if (codes.length) {
-        setNoMatch(`Read "${codes[0]}" but found no match`);
-      } else {
-        setNoMatch('No card number found — fill the frame and hold steady');
-      }
-    } catch {
-      setNoMatch('Scan failed — try again');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // ---- Page mode (capture a whole page → OCR → drop every match into the tray) ----
-  async function capturePage() {
-    if (busy || !cameraRef.current) return;
-    setBusy(true);
-    setNoMatch(null);
-    setAddMsg(null);
-    try {
-      // Full resolution: a page's card numbers are tiny, so don't downsample.
-      const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
-      if (!photo?.uri) {
-        setNoMatch('Could not capture — try again');
-        return;
-      }
-      const ocr = await TextRecognition.recognize(photo.uri);
-      const { cards, unmatched } = await scanForCards(ocr.text);
-      if (cards.length === 0) {
-        setNoMatch(
-          unmatched.length
-            ? `Read ${unmatched.length} number${unmatched.length === 1 ? '' : 's'} but matched none`
-            : 'No card numbers found — fill the frame, good light',
-        );
-        return;
-      }
-      mergeIntoTray(cards);
-      setNoMatch(
-        `Added ${cards.length} card${cards.length === 1 ? '' : 's'} to tray` +
-          (unmatched.length ? ` · ${unmatched.length} unreadable` : ''),
-      );
-    } catch {
-      setNoMatch('Scan failed — try again');
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -468,23 +402,7 @@ export default function ScanScreen() {
               <View style={{ height: 60 }} />
             )
           ) : (
-            <View style={styles.shutterRow}>
-              {mode === 'page' && tray.length > 0 ? (
-                <Pressable style={styles.trayBtn} onPress={() => setTrayOpen(true)}>
-                  <Ionicons name="albums" size={18} color={colors.bgPrimary} />
-                  <Text style={styles.trayBtnText}>{tray.length}</Text>
-                </Pressable>
-              ) : (
-                <View style={styles.trayBtnSpacer} />
-              )}
-              <Pressable
-                style={[styles.shutter, busy && styles.shutterBusy]}
-                onPress={mode === 'card' ? captureCard : capturePage}
-                disabled={busy}>
-                {busy ? <ActivityIndicator color={colors.bgPrimary} /> : <View style={styles.shutterInner} />}
-              </Pressable>
-              <View style={styles.trayBtnSpacer} />
-            </View>
+            <View style={{ height: 60 }} />
           )}
         </View>
       </SafeAreaView>
