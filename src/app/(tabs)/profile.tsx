@@ -300,9 +300,7 @@ export default function ProfileScreen() {
               <Text style={styles.checkBtnText}>CHECK</Text>
             </Pressable>
           </View>
-          <Text style={styles.hint}>
-            Tip: use your local nickname so other players recognize you. Changes are limited to once every 90 days.
-          </Text>
+          <Text style={styles.hint}>Changes are limited to once every 90 days.</Text>
           {nameLocked ? (
             <Text style={styles.lockMsg}>
               Display name is locked until {nameLockedUntil!.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}.
@@ -334,7 +332,6 @@ export default function ProfileScreen() {
               <Chip key={c.value} label={c.label} active={city === c.value} onPress={() => setCity(c.value)} />
             ))}
           </View>
-          <Text style={styles.hint}>Used to pre-fill the binder search filters.</Text>
         </Field>
 
         {availableBoroughs.length > 0 ? (

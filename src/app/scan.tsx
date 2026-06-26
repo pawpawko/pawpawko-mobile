@@ -113,6 +113,30 @@ export default function ScanScreen() {
   const livePausedRef = useRef(livePaused);
   livePausedRef.current = livePaused;
 
+  // Live OCR text from the VisionCamera frame stream → card codes → DB lookup →
+  // route by mode (CARD opens the result sheet; PAGE drops into the tray).
+  // Stable identity (reads refs) so the frame worklet stays valid across renders.
+  // Must stay ABOVE the permission early-returns: every render has to call the
+  // same hooks in the same order, or React throws "rendered more hooks than
+  // during the previous render".
+  const onLiveText = useCallback(async (text: string) => {
+    if (liveBusyRef.current || livePausedRef.current) return;
+    const codes = extractCardCodes(text).filter((c) => !seenCodesRef.current.has(c));
+    if (codes.length === 0) return;
+    liveBusyRef.current = true;
+    try {
+      const found = await lookupCards(codes);
+      // Mark every code we attempted (hits and misses) so a card sitting in
+      // frame isn't re-queried each frame.
+      codes.forEach((c) => seenCodesRef.current.add(c));
+      if (found.length === 0) return;
+      if (modeRef.current === 'page') mergeIntoTray(found);
+      else setScanned(found[0]);
+    } finally {
+      liveBusyRef.current = false;
+    }
+  }, []);
+
   if (!permission) {
     return (
       <View style={styles.centered}>
@@ -175,27 +199,6 @@ export default function ScanScreen() {
       return Array.from(map.values());
     });
   }
-
-  // Live OCR text from the VisionCamera frame stream → card codes → DB lookup →
-  // route by mode (CARD opens the result sheet; PAGE drops into the tray).
-  // Stable identity (reads refs) so the frame worklet stays valid across renders.
-  const onLiveText = useCallback(async (text: string) => {
-    if (liveBusyRef.current || livePausedRef.current) return;
-    const codes = extractCardCodes(text).filter((c) => !seenCodesRef.current.has(c));
-    if (codes.length === 0) return;
-    liveBusyRef.current = true;
-    try {
-      const found = await lookupCards(codes);
-      // Mark every code we attempted (hits and misses) so a card sitting in
-      // frame isn't re-queried each frame.
-      codes.forEach((c) => seenCodesRef.current.add(c));
-      if (found.length === 0) return;
-      if (modeRef.current === 'page') mergeIntoTray(found);
-      else setScanned(found[0]);
-    } finally {
-      liveBusyRef.current = false;
-    }
-  }, []);
 
   function setTrayQty(cardCode: string, next: number) {
     setTray((prev) =>

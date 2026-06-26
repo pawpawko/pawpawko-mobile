@@ -98,9 +98,6 @@ export default function TradeTapScreen() {
                 />
               ) : null}
             </View>
-            <Text style={styles.qrHint}>
-              Show this to a partner so they can scan it from the camera button on Trades.
-            </Text>
           </Pressable>
         </Pressable>
       </Modal>
