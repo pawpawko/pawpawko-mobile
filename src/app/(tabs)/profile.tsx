@@ -17,6 +17,7 @@ import {
 import { DiceLoader } from '@/components/dice-loader';
 import { useAuth } from '@/lib/auth';
 import { BOROUGHS_BY_CITY, CITIES } from '@/lib/constants';
+import { useNotifications } from '@/lib/notifications-context';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
@@ -41,6 +42,7 @@ export default function ProfileScreen() {
   const { session, refreshSetup } = useAuth();
   const userId = session?.user.id;
   const router = useRouter();
+  const { unread } = useNotifications();
   const scrollRef = useRef<ScrollView>(null);
 
   // Dev-only tester for Trade Matches. Picks the first non-self user with a
@@ -360,6 +362,32 @@ export default function ProfileScreen() {
         </Pressable>
 
         <View style={styles.divider} />
+
+        <Pressable
+          style={({ pressed }) => [styles.tradeTapBtn, pressed && styles.tradeTapBtnPressed]}
+          onPress={() => router.push('/notifications')}>
+          <Ionicons name="notifications-outline" size={18} color={colors.bgPrimary} />
+          <Text style={styles.tradeTapBtnText}>NOTIFICATIONS</Text>
+          {unread > 0 ? (
+            <View
+              style={{
+                position: 'absolute',
+                top: -6,
+                right: -6,
+                minWidth: 18,
+                height: 18,
+                borderRadius: 9,
+                paddingHorizontal: 4,
+                backgroundColor: colors.danger,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>
+              <Text style={{ color: '#fff', fontSize: 10, fontFamily: fonts.bodyBold }}>
+                {unread > 9 ? '9+' : String(unread)}
+              </Text>
+            </View>
+          ) : null}
+        </Pressable>
 
         <Pressable
           style={({ pressed }) => [styles.tradeTapBtn, pressed && styles.tradeTapBtnPressed]}

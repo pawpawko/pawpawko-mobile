@@ -160,10 +160,10 @@ export default function MyBindersScreen() {
         options={{
           headerRight: () => (
             <Pressable
-              onPress={() => setNewOpen(true)}
+              onPress={() => router.push({ pathname: '/scan', params: { scope: 'card' } })}
               style={({ pressed }) => ({ paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
-              accessibilityLabel="New binder">
-              <Ionicons name="add" size={26} color={colors.accent} />
+              accessibilityLabel="Scan a card into a binder">
+              <Ionicons name="camera-outline" size={24} color={colors.accent} />
             </Pressable>
           ),
         }}
@@ -183,8 +183,30 @@ export default function MyBindersScreen() {
               tintColor={colors.accent}
             />
           }>
+          <Pressable
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              alignSelf: 'center',
+              paddingHorizontal: 16,
+              paddingVertical: 10,
+              marginBottom: 12,
+              borderRadius: radius.sm,
+              borderWidth: 1,
+              borderColor: colors.borderAccent,
+              opacity: pressed ? 0.7 : 1,
+            })}
+            onPress={() => setNewOpen(true)}
+            accessibilityLabel="New binder">
+            <Ionicons name="add" size={18} color={colors.accent} />
+            <Text style={{ color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 }}>
+              NEW BINDER
+            </Text>
+          </Pressable>
           {groups.length === 0 ? (
-            <Text style={styles.empty}>No binders yet — tap + to create one.</Text>
+            <Text style={styles.empty}>No binders yet — tap &ldquo;New binder&rdquo; above to create one.</Text>
           ) : (
             groups.map(({ game, data }) => (
               <GameSection

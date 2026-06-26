@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -71,7 +71,12 @@ export default function ScanScreen() {
   const cameraRef = useRef<CameraView>(null);
   const lockedRef = useRef(false);
 
-  const [mode, setMode] = useState<Mode>('qr');
+  // Entry scope limits the modes: trades opens a QR-only camera, the binder tab
+  // opens a card-only (CARD + PAGE) camera; default shows all three.
+  const { scope } = useLocalSearchParams<{ scope?: string }>();
+  const availableModes: Mode[] =
+    scope === 'qr' ? ['qr'] : scope === 'card' ? ['card', 'page'] : ['qr', 'card', 'page'];
+  const [mode, setMode] = useState<Mode>(availableModes[0]);
   const [error, setError] = useState<string | null>(null);
 
   // Card-scan (OCR) state.
@@ -360,18 +365,20 @@ export default function ScanScreen() {
             <View style={styles.closeBtn} />
           </View>
 
-          <View style={styles.modeRow}>
-            {(['qr', 'card', 'page'] as Mode[]).map((m) => (
-              <Pressable
-                key={m}
-                onPress={() => switchMode(m)}
-                style={[styles.modePill, mode === m && styles.modePillActive]}>
-                <Text style={[styles.modePillText, mode === m && styles.modePillTextActive]}>
-                  {m === 'qr' ? 'QR' : m === 'card' ? 'CARD' : 'PAGE'}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          {availableModes.length > 1 ? (
+            <View style={styles.modeRow}>
+              {availableModes.map((m) => (
+                <Pressable
+                  key={m}
+                  onPress={() => switchMode(m)}
+                  style={[styles.modePill, mode === m && styles.modePillActive]}>
+                  <Text style={[styles.modePillText, mode === m && styles.modePillTextActive]}>
+                    {m === 'qr' ? 'QR' : m === 'card' ? 'CARD' : 'PAGE'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </View>
 
         {/* Aim guide */}
@@ -470,17 +477,21 @@ export default function ScanScreen() {
             </Text>
 
             {pickerMode === 'single' ? (
-              <View style={styles.qtyRow}>
-                <Text style={styles.qtyLabel}>Quantity</Text>
-                <View style={styles.qtyControls}>
-                  <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.max(1, q - 1))}>
-                    <Ionicons name="remove" size={18} color={colors.accent} />
-                  </Pressable>
-                  <Text style={styles.qtyValue}>{qty}</Text>
-                  <Pressable style={styles.qtyBtn} onPress={() => setQty((q) => Math.min(99, q + 1))}>
-                    <Ionicons name="add" size={18} color={colors.accent} />
-                  </Pressable>
-                </View>
+              <View style={styles.qtyBlock}>
+                <Text style={styles.qtyLabel}>Quantity · {qty}</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.qtyScroll}>
+                  {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => (
+                    <Pressable
+                      key={n}
+                      onPress={() => setQty(n)}
+                      style={[styles.qtyNum, qty === n && styles.qtyNumActive]}>
+                      <Text style={[styles.qtyNumText, qty === n && styles.qtyNumTextActive]}>{n}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
               </View>
             ) : null}
 
@@ -726,6 +737,12 @@ const styles = StyleSheet.create({
   qtyControls: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   qtyBtn: { width: 36, height: 36, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.borderAccent, alignItems: 'center', justifyContent: 'center' },
   qtyValue: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 16, minWidth: 24, textAlign: 'center' },
+  qtyBlock: { alignSelf: 'stretch', marginBottom: 4 },
+  qtyScroll: { gap: 8, paddingVertical: 8, paddingRight: 8 },
+  qtyNum: { minWidth: 40, height: 40, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  qtyNumActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  qtyNumText: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 16 },
+  qtyNumTextActive: { color: colors.bgPrimary },
   binderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
   binderRowText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15, flex: 1 },
   pickerHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, textAlign: 'center', marginTop: 4 },

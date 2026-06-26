@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -96,18 +96,6 @@ export default function DecksScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <Pressable
-              onPress={() => setNewOpen(true)}
-              style={({ pressed }) => ({ paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
-              accessibilityLabel="New deck">
-              <Ionicons name="add" size={26} color={colors.accent} />
-            </Pressable>
-          ),
-        }}
-      />
       {loading && tiles.length === 0 ? (
         <View style={{ alignItems: 'center', marginTop: 32 }}>
           <DiceLoader />
