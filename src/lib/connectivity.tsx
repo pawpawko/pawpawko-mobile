@@ -1,8 +1,9 @@
 import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, fonts, radius } from './theme';
+import { fonts, radius, type Palette } from './theme';
+import { useTheme } from './theme-context';
 
 // ---------------------------------------------------------------------------
 // Connectivity tracking.
@@ -73,6 +74,8 @@ export function ConnectivityProvider({ children }: { children: ReactNode }) {
 // Thin app-wide pill shown while offline. pointerEvents=none so it never traps
 // taps over the UI underneath.
 function OfflineBanner() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.wrap} pointerEvents="none">
       <View style={styles.pill}>
@@ -82,7 +85,7 @@ function OfflineBanner() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   wrap: {
     position: 'absolute',
     left: 0,

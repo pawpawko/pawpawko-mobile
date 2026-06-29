@@ -1,7 +1,7 @@
 import { type ColorValue } from 'react-native';
 import Svg, { G, Path, Rect } from 'react-native-svg';
 
-import { colors } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type IconProps = { color: ColorValue; size: number };
 
@@ -9,6 +9,7 @@ type IconProps = { color: ColorValue; size: number };
 // The front card is filled with the tab-bar background so it cleanly occludes
 // the tilted card behind it; only the stroke takes the active/inactive tint.
 export function CardsIcon({ color, size }: IconProps) {
+  const { colors } = useTheme();
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <G>

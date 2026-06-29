@@ -4,7 +4,7 @@ import { Camera, useCameraDevice, useCameraPermission, useFrameOutput } from 're
 import { useTextRecognition } from 'react-native-vision-camera-ocr-plus';
 import { scheduleOnRN } from 'react-native-worklets';
 
-import { colors, fonts } from '@/lib/theme';
+import { fonts } from '@/lib/theme';
 
 // VisionCamera-backed live OCR camera for the card-scan flow. Streams every
 // recognized text blob up to the parent via onText (throttled natively by
@@ -51,5 +51,5 @@ export function CardScanner({ paused, onText }: { paused: boolean; onText: (text
 
 const styles = StyleSheet.create({
   center: { justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', padding: 32 },
-  text: { color: colors.textPrimary, fontFamily: fonts.body, textAlign: 'center' },
+  text: { color: '#fdf6e7', fontFamily: fonts.body, textAlign: 'center' },
 });

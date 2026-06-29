@@ -45,7 +45,8 @@ import {
   standardLegal,
 } from '@/lib/decks';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 const artKey = (deckId: string) => `pawpaw:deckArt:${deckId}`;
 // Per-card alt-art override map, persisted separately from the leader's art.
@@ -74,6 +75,8 @@ export default function DeckEditorScreen() {
   const { session } = useAuth();
   const { width: screenW } = useWindowDimensions();
   const cardW = (screenW - SCROLL_PAD * 2 - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS;
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [loading, setLoading] = useState(true);
   const [deck, setDeck] = useState<DeckRow | null>(null);
@@ -1103,6 +1106,8 @@ function Stepper({
   minusDisabled?: boolean;
   plusDisabled?: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.stepRow}>
       <Text style={styles.stepLabel}>{label}</Text>
@@ -1143,6 +1148,8 @@ function FilterRow({
   options: { label: string; value: string }[];
   onPick: (v: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.filterRow}>
       <Text style={styles.filterLabel}>{label}</Text>
@@ -1175,6 +1182,8 @@ function AddCardsModal({
   cards: DeckCardRow[];
   onAdd: (c: CardInfo) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [query, setQuery] = useState('');
   const [fType, setFType] = useState('');
   const [fCost, setFCost] = useState<number | null>(null);
@@ -1502,6 +1511,8 @@ function StatsModal({
   info: Record<string, CardInfo>;
   leader: CardInfo | null;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [trigOpen, setTrigOpen] = useState(false);
 
@@ -1716,7 +1727,7 @@ function StatsModal({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgPrimary },
   scroll: { padding: 16, paddingBottom: 48 },
@@ -1861,7 +1872,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  partnerBtnText: { color: colors.bgPrimary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  partnerBtnText: { color: colors.onAccent, fontFamily: fonts.bodyBold, fontSize: 13 },
   partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
 
   editor: {
@@ -1910,7 +1921,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     marginTop: 16,
   },
-  addCardsText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 1 },
+  addCardsText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 1 },
 
   cardGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: GRID_GAP, marginTop: 12 },
   cardTile: { position: 'relative' },
@@ -1953,7 +1964,7 @@ const styles = StyleSheet.create({
   },
   pillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   pillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  pillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  pillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
 
   input: {
     borderWidth: 1,
@@ -2056,7 +2067,7 @@ const styles = StyleSheet.create({
   },
   fpillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   fpillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
-  fpillTextActive: { color: colors.bgPrimary, fontFamily: fonts.bodyBold },
+  fpillTextActive: { color: colors.onAccent, fontFamily: fonts.bodyBold },
 
   cbCount: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, marginTop: 14 },
   cbMore: {

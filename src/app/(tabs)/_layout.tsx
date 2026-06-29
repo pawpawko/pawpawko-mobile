@@ -16,7 +16,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AutoSearchSheet } from '@/components/auto-search-sheet';
 import { BookOpenIcon, CardsIcon } from '@/components/tab-icons';
 import { useAutoSearch } from '@/lib/auto-search-context';
-import { colors, fonts } from '@/lib/theme';
+import { fonts } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 // Visible header chrome (below the status bar) is HEADER_CONTENT_H tall.
 // HEADER_TITLE_PAD_BOTTOM is the breathing space between the Jolly and the
@@ -26,6 +27,7 @@ const HEADER_TITLE_PAD_BOTTOM = 4;
 
 const HeaderJollyButton = memo(function HeaderJollyButton({ onPress }: { onPress: () => void }) {
   const { active } = useAutoSearch();
+  const { colors } = useTheme();
   const pulse = useSharedValue(0);
 
   useEffect(() => {
@@ -96,6 +98,7 @@ const HeaderJollyButton = memo(function HeaderJollyButton({ onPress }: { onPress
 export default function TabsLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const [sheetOpen, setSheetOpen] = useState(false);
   const openSheet = useCallback(() => setSheetOpen(true), []);
   return (
@@ -118,7 +121,7 @@ export default function TabsLayout() {
           tabBarStyle: { backgroundColor: colors.bgSecondary, borderTopColor: colors.border },
           tabBarActiveTintColor: colors.accent,
           tabBarInactiveTintColor: colors.textMuted,
-          tabBarLabelStyle: { fontFamily: fonts.body, fontSize: 11, letterSpacing: 1 },
+          tabBarLabelStyle: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 1 },
           sceneStyle: { backgroundColor: colors.bgPrimary },
         }}>
         <Tabs.Screen

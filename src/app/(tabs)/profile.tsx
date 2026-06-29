@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -19,7 +20,8 @@ import { useAuth } from '@/lib/auth';
 import { BOROUGHS_BY_CITY, CITIES } from '@/lib/constants';
 import { useNotifications } from '@/lib/notifications-context';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 const NYC_SUBWAY_STOPS = [
   'Times Sq-42 St', 'Grand Central-42 St', '34 St-Penn Station', '34 St-Herald Sq',
@@ -44,6 +46,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { unread } = useNotifications();
   const scrollRef = useRef<ScrollView>(null);
+  const { colors, theme, toggle: toggleTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Dev-only tester for Trade Matches. Picks the first non-self user with a
   // trade binder and routes to /trade-matches/<their-uuid>. Will be removed
@@ -269,6 +273,17 @@ export default function ProfileScreen() {
         <Text style={styles.welcome}>Welcome back{originalName ? `, ${originalName}` : ''}</Text>
         <Text style={styles.email}>{session?.user.email}</Text>
 
+        <View style={styles.themeRow}>
+          <Text style={styles.themeLabel}>Dark Mode</Text>
+          <Switch
+            value={theme === 'dark'}
+            onValueChange={toggleTheme}
+            trackColor={{ false: 'rgba(127,127,127,0.45)', true: colors.accent }}
+            thumbColor="#fff"
+            ios_backgroundColor="rgba(127,127,127,0.45)"
+          />
+        </View>
+
         {setupRequired ? (
           <View style={styles.notice}>
             <Text style={styles.noticeText}>
@@ -402,6 +417,8 @@ export default function ProfileScreen() {
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label.toUpperCase()}</Text>
@@ -419,6 +436,8 @@ function SubwayDropdown({
   selected: string[];
   onToggle: (s: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [open, setOpen] = useState(false);
   const label =
     selected.length === 0 ? 'Any' : selected.length === 1 ? selected[0] : `${selected.length} selected`;
@@ -444,6 +463,8 @@ function SubwayDropdown({
 }
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Pressable
       onPress={onPress}
@@ -453,7 +474,9 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
+  themeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 2 },
+  themeLabel: { color: colors.textPrimary, fontFamily: fonts.serif, letterSpacing: 2, fontSize: 12, textTransform: 'uppercase' },
   flex: { flex: 1, backgroundColor: colors.bgPrimary },
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   content: { padding: 20, gap: 4, paddingBottom: 60 },
@@ -545,7 +568,7 @@ const styles = StyleSheet.create({
   saveBtn: { marginTop: 20, padding: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
   saveBtnPressed: { backgroundColor: colors.accentLight },
   saveBtnDisabled: { opacity: 0.5 },
-  saveBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
+  saveBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
 
   tradeTapBtn: {
     flexDirection: 'row',
@@ -558,7 +581,7 @@ const styles = StyleSheet.create({
   },
   tradeTapBtnPressed: { backgroundColor: colors.accentLight },
   tradeTapBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 14,
     letterSpacing: 3,

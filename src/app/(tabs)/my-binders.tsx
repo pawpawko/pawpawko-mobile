@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -22,7 +22,8 @@ import { FlairPill } from '@/components/flair-pill';
 import { useAuth } from '@/lib/auth';
 import { cacheKeys, readCache, writeCache } from '@/lib/offline-cache';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type Binder = {
   id: string;
@@ -70,6 +71,8 @@ export default function MyBindersScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const load = useCallback(
     async (mode: 'initial' | 'focus' | 'pull' = 'focus') => {
@@ -231,6 +234,8 @@ function GameSection({
   onOpen: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.groupWrap}>
       <Pressable
@@ -264,6 +269,8 @@ function BinderCard({
   count: number;
   onPress: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const hasCover = !!binder.sleeve_image_url;
   return (
     <Pressable
@@ -318,6 +325,8 @@ function NewBinderModal({
   const [flair, setFlair] = useState<Flair>('trade');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Default category to whatever the user last picked (across the app)
   useEffect(() => {
@@ -427,6 +436,8 @@ function PillRow({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.pillRow}>
       {options.map((opt) => {
@@ -448,7 +459,7 @@ function PillRow({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   scrollContent: { paddingBottom: 96 },
   empty: { textAlign: 'center', marginTop: 48, color: colors.textMuted, fontFamily: fonts.body },
@@ -518,7 +529,7 @@ const styles = StyleSheet.create({
   },
   cardBody: { padding: 14 },
   cardName: {
-    fontFamily: fonts.serif,
+    fontFamily: fonts.display,
     fontSize: 16,
     letterSpacing: 0.5,
     color: colors.textPrimary,
@@ -590,7 +601,7 @@ const styles = StyleSheet.create({
   pillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   pillPressed: { backgroundColor: colors.bgCardHover },
   pillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  pillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  pillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 6 },
   submitBtn: {
     backgroundColor: colors.accent,
@@ -602,7 +613,7 @@ const styles = StyleSheet.create({
   submitBtnPressed: { backgroundColor: colors.accentLight },
   submitBtnDisabled: { opacity: 0.4 },
   submitBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     letterSpacing: 2,
     fontSize: 13,

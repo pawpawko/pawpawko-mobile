@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Modal,
@@ -24,7 +24,8 @@ import {
   type BinderCategory,
 } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type BinderRow = {
   binder_id: string;
@@ -75,6 +76,8 @@ export default function TradesScreen() {
   const [rows, setRows] = useState<BinderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Restore last-game choice
   useEffect(() => {
@@ -310,6 +313,8 @@ export default function TradesScreen() {
 }
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Pressable
       onPress={onPress}
@@ -333,6 +338,8 @@ function MultiSelectField({
   emptyLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const summary =
     selected.length === 0
@@ -420,7 +427,7 @@ function MultiSelectField({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   tabBar: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary },
   tab: { flex: 1, paddingVertical: 14, alignItems: 'center' },
@@ -546,7 +553,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sheetDoneBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     letterSpacing: 2,
     fontSize: 13,
@@ -567,7 +574,7 @@ const styles = StyleSheet.create({
   filterButtons: { flexDirection: 'row', gap: 8, marginTop: 12 },
   applyBtn: { flex: 1, padding: 12, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
   applyBtnPressed: { backgroundColor: colors.accentLight },
-  applyBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
+  applyBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
   clearBtn: { flex: 1, padding: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.borderAccent, alignItems: 'center' },
   clearBtnPressed: { backgroundColor: colors.bgCard },
   clearBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
@@ -590,7 +597,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   matchBadgeText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 11,
     letterSpacing: 1.5,

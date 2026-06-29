@@ -326,5 +326,5 @@ const styles = StyleSheet.create({
   badgeOffer: { borderColor: '#7ec96a', backgroundColor: 'transparent' },
   badgeOfferText: { color: '#7ec96a' },
   badgeMutual: { borderColor: colors.accent, backgroundColor: colors.accent },
-  badgeMutualText: { color: colors.bgPrimary },
+  badgeMutualText: { color: colors.onAccent },
 });

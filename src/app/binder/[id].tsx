@@ -61,7 +61,8 @@ import { cacheKeys, readCache, writeCache } from '@/lib/offline-cache';
 import { binderShareUrl } from '@/lib/slug';
 import { supabase } from '@/lib/supabase';
 import { enqueue, newId, pendingForBinder } from '@/lib/sync-queue';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type Flair = 'trade' | 'wishlist';
 const FLAIR_OPTIONS: { value: Flair; label: string }[] = [
@@ -113,6 +114,8 @@ export default function BinderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { session } = useAuth();
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [header, setHeader] = useState<BinderHeader | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
@@ -942,6 +945,8 @@ function EditToolbar({
   onAddCards: () => void;
   onOpenSettings?: () => void; // owner-only; hidden for collaborators
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.toolbar}>
       <Pressable
@@ -985,6 +990,8 @@ function SortPicker({
   options: { value: SortMode; label: string }[];
   onChange: (m: SortMode) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.sortPicker}>
       <FlatList
@@ -1019,6 +1026,8 @@ function Pagination({
   totalPages: number;
   onChange: (p: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.pagination}>
       <Pressable
@@ -1061,6 +1070,8 @@ function BinderPager({
   onCardPress: (absoluteIdx: number) => void;
   isWishlist: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [pageHeight, setPageHeight] = useState(0);
   const listRef = useRef<FlatList<Listing[]>>(null);
@@ -1206,6 +1217,8 @@ function DraggableTile({
   numColumns: number;
   isWishlist: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const card = cards[item.card_code];
   return (
     <ScaleDecorator>
@@ -1254,6 +1267,8 @@ function EditBinderModal({
   onSaveFlair: (next: Flair) => Promise<void>;
   onDelete: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [name, setName] = useState(currentName);
   const [savingName, setSavingName] = useState(false);
 
@@ -1460,6 +1475,8 @@ function CardBrowserModal({
   game: string;
   onPickCard: (allResults: CardInfo[], index: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<BrowserFilters>(EMPTY_FILTERS);
   const [seriesOptions, setSeriesOptions] = useState<string[]>([]);
@@ -1743,6 +1760,8 @@ function FilterPickerSheet({
   onPick: (v: string) => void;
   onClose: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.shareBackdrop} onPress={onClose}>
@@ -1803,6 +1822,8 @@ function ListingFormSheet({
   onDestroy?: () => Promise<void>;
   destroyLabel?: string;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [qty, setQty] = useState(String(initialQty));
   const [ltype, setLtype] = useState<ListingType>(initialType);
   const [busy, setBusy] = useState(false);
@@ -1919,6 +1940,8 @@ function AddListingPager({
   onAddToWishlist: ((card: CardInfo) => Promise<WishlistResult>) | null;
   isWishlist: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [qty, setQty] = useState('1');
@@ -2216,6 +2239,8 @@ function SwipeableDeckPage({
   // from the resting position. We mirror it into translateY (negative) for
   // the card transform but drive the overlay interpolations off the
   // positive magnitude so all thresholds stay readable.
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const pull = useSharedValue(0);
 
   const pan = Gesture.Pan()
@@ -2369,6 +2394,8 @@ function CardPagerModal({
   isWishlist: boolean;
   onReceive?: (l: Listing) => void; // owner "Got it" on a wishlist card
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [currentIdx, setCurrentIdx] = useState(initialIndex);
   const listRef = useRef<FlatList<Listing>>(null);
@@ -2454,7 +2481,7 @@ function CardPagerModal({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary },
   grid: { padding: 8 },
 
@@ -2525,7 +2552,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.accent,
   },
-  enterEditBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
+  enterEditBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
   doneBtnText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
 
   toolbar: {
@@ -2580,7 +2607,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     includeFontPadding: false,
   },
-  sortChipTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  sortChipTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
 
   pagination: {
     flexDirection: 'row',
@@ -2650,7 +2677,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 18,
   },
-  gotItText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
+  gotItText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
   modalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2690,7 +2717,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   shareBtnPressed: { backgroundColor: colors.accentLight },
-  shareBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
+  shareBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
 
   pagerCount: {
     position: 'absolute',
@@ -2738,7 +2765,7 @@ const styles = StyleSheet.create({
   },
   editPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   editPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  editPillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  editPillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
   editSaveDisabled: { opacity: 0.4 },
   manageBtn: {
     flexDirection: 'row',
@@ -2792,7 +2819,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  partnerInviteBtnText: { color: colors.bgPrimary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  partnerInviteBtnText: { color: colors.onAccent, fontFamily: fonts.bodyBold, fontSize: 13 },
   partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
 
   sheetImg: { width: 140, aspectRatio: 0.72, alignSelf: 'center', borderRadius: radius.sm },
@@ -2969,7 +2996,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   applyBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     letterSpacing: 2,
     fontSize: 13,

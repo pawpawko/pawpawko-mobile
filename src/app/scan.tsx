@@ -341,7 +341,7 @@ export default function ScanScreen() {
         <View>
           <View style={styles.topBar}>
             <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-              <Ionicons name="close" size={28} color={colors.textPrimary} />
+              <Ionicons name="close" size={28} color="#fdf6e7" />
             </Pressable>
             <Text style={styles.headerTitle}>{mode === 'qr' ? 'SCAN QR' : 'SCAN CARD'}</Text>
             <View style={styles.closeBtn} />
@@ -612,7 +612,7 @@ const styles = StyleSheet.create({
   body: { color: colors.textSecondary, fontFamily: fonts.body, textAlign: 'center', fontSize: 14 },
   btn: { marginTop: 12, padding: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center', alignSelf: 'stretch' },
   btnPressed: { backgroundColor: colors.accentLight },
-  btnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
+  btnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
   cancelBtn: { marginTop: 8, padding: 8 },
   cancelText: { color: colors.textMuted, fontFamily: fonts.body },
 
@@ -625,7 +625,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   closeBtn: { padding: 8, width: 44, alignItems: 'center' },
-  headerTitle: { color: colors.textPrimary, fontFamily: fonts.serifBold, letterSpacing: 3, fontSize: 14 },
+  headerTitle: { color: '#fdf6e7', fontFamily: fonts.serifBold, letterSpacing: 3, fontSize: 14 },
 
   modeRow: {
     flexDirection: 'row',
@@ -638,8 +638,8 @@ const styles = StyleSheet.create({
   },
   modePill: { paddingHorizontal: 22, paddingVertical: 8, borderRadius: radius.sm },
   modePillActive: { backgroundColor: colors.accent },
-  modePillText: { color: colors.textSecondary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
-  modePillTextActive: { color: colors.bgPrimary },
+  modePillText: { color: 'rgba(253,246,231,0.82)', fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
+  modePillTextActive: { color: colors.onAccent },
 
   aimWrap: { alignItems: 'center', gap: 16 },
   aimBox: { width: 260, height: 260, position: 'relative' },
@@ -650,7 +650,7 @@ const styles = StyleSheet.create({
   cornerTR: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3 },
   cornerBL: { bottom: 0, left: 0, borderBottomWidth: 3, borderLeftWidth: 3 },
   cornerBR: { bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3 },
-  hint: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4, textAlign: 'center', paddingHorizontal: 24 },
+  hint: { color: '#fdf6e7', fontFamily: fonts.body, fontSize: 13, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4, textAlign: 'center', paddingHorizontal: 24 },
 
   statusText: { color: colors.textMuted, fontFamily: fonts.body },
 
@@ -681,7 +681,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: radius.sm,
   },
-  toastText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13, textAlign: 'center' },
+  toastText: { color: '#fdf6e7', fontFamily: fonts.body, fontSize: 13, textAlign: 'center' },
 
   resultWrap: {
     position: 'absolute',
@@ -707,7 +707,7 @@ const styles = StyleSheet.create({
   resultCode: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
   wishMsg: { color: colors.accent, fontFamily: fonts.body, fontSize: 13, marginTop: 2 },
   primaryBtn: { marginTop: 10, padding: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center', alignSelf: 'stretch' },
-  primaryBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
+  primaryBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
   secondaryBtn: { marginTop: 8, padding: 14, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.borderAccent, alignItems: 'center', alignSelf: 'stretch' },
   secondaryBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
 
@@ -722,7 +722,7 @@ const styles = StyleSheet.create({
   qtyNum: { minWidth: 40, height: 40, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   qtyNumActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   qtyNumText: { color: colors.textPrimary, fontFamily: fonts.serifBold, fontSize: 16 },
-  qtyNumTextActive: { color: colors.bgPrimary },
+  qtyNumTextActive: { color: colors.onAccent },
   binderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch', paddingVertical: 12, paddingHorizontal: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
   binderRowText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15, flex: 1 },
   pickerHint: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 13, textAlign: 'center', marginTop: 4 },
@@ -730,9 +730,9 @@ const styles = StyleSheet.create({
   pageBox: { width: 300, height: 380, position: 'relative' },
   shutterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24 },
   trayBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.accent, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.lg },
-  trayBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 15 },
+  trayBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 15 },
   trayBtnSpacer: { width: 58 },
-  liveHint: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
+  liveHint: { color: '#fdf6e7', fontFamily: fonts.body, fontSize: 13, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
 
   trayBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   traySheet: { backgroundColor: colors.bgPrimary, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, padding: 16, paddingBottom: 28, maxHeight: '85%' },

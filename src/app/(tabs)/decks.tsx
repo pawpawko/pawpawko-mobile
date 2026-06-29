@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -32,7 +32,8 @@ import {
   standardLegal,
 } from '@/lib/decks';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type Format = 'standard' | 'eternal';
 
@@ -47,6 +48,8 @@ export default function DecksScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const load = useCallback(
     async (mode: 'initial' | 'focus' | 'pull' = 'focus') => {
@@ -161,6 +164,8 @@ const TONE: Record<string, string> = {
 };
 
 function Badge({ label, tone }: { label: string; tone: keyof typeof TONE | string }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const color = TONE[tone] ?? colors.textMuted;
   return (
     <View style={[styles.badge, { borderColor: color }]}>
@@ -186,6 +191,8 @@ function NewDeckModal({
   const [results, setResults] = useState<CardInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   useEffect(() => {
     if (!visible) return;
@@ -364,7 +371,7 @@ function NewDeckModal({
 
 const TILE_GAP = 12;
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   scrollContent: { padding: 16, paddingBottom: 32 },
   empty: { textAlign: 'center', marginTop: 32, color: colors.textMuted, fontFamily: fonts.body },
@@ -393,7 +400,7 @@ const styles = StyleSheet.create({
   deckImg: { width: '100%', aspectRatio: 0.72 },
   deckImgEmpty: { backgroundColor: colors.bgCard },
   deckBody: { padding: 8 },
-  deckName: { color: colors.textPrimary, fontFamily: fonts.serif, fontSize: 12, marginBottom: 5 },
+  deckName: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 12, marginBottom: 5 },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 1 },
   badgeText: { fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', fontFamily: fonts.body },
@@ -441,7 +448,7 @@ const styles = StyleSheet.create({
   },
   pillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   pillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  pillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  pillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 8 },
 
   results: { marginTop: 8, maxHeight: 240 },

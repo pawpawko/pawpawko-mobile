@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useMemo } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { clearFailed, pendingForBinder, usePendingSync } from '@/lib/sync-queue';
-import { colors, fonts } from '@/lib/theme';
+import { fonts, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 // Status strip shown while edits are queued, syncing, or have permanently
 // failed. Pass `binderId` to scope counts to one binder (used on the binder
@@ -11,6 +13,8 @@ export function SyncStatusBar({ binderId }: { binderId?: string }) {
   const { pending, syncing, failed } = usePendingSync();
   const count = binderId ? pendingForBinder(binderId) : pending;
   const failedCount = binderId ? failed.filter((f) => f.binderId === binderId).length : failed.length;
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   if (count === 0 && failedCount === 0) return null;
 
@@ -42,7 +46,7 @@ export function SyncStatusBar({ binderId }: { binderId?: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
