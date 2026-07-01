@@ -21,11 +21,11 @@ export const lightColors = {
   textMuted: '#9c8c6e',
   border: 'rgba(58,44,20,0.12)',
   borderAccent: 'rgba(240,168,24,0.45)',
-  // dropdown/menu surfaces — lavender in light mode (mirrors web --menu-*)
-  menuBg: '#9d7be0',
+  // dropdown/menu surfaces — pale lavender panel (mirrors web --menu-*)
+  menuBg: '#f0eafb',
   menuText: '#3a2c14',
-  menuHover: '#8e6bd6',
-  menuBorder: 'rgba(58,44,20,0.18)',
+  menuHover: '#e3d5f6',
+  menuBorder: 'rgba(157,123,224,0.5)',
   danger: '#d36363',
 };
 
@@ -44,13 +44,13 @@ export const darkColors: Palette = {
   textPrimary: '#f2ece0',
   textSecondary: '#cabfa9',
   textMuted: '#998f7d',
-  border: 'rgba(242,236,224,0.11)',
-  borderAccent: 'rgba(240,168,24,0.42)',
-  // dropdowns stay consistent with the dark palette (not lavender)
-  menuBg: '#2f2b25',
+  border: 'rgba(242,236,224,0.12)',
+  borderAccent: 'rgba(240,168,24,0.45)',
+  // dropdowns — purple-tinted charcoal + lavender border (mirrors web --menu-*)
+  menuBg: '#2b2436',
   menuText: '#f2ece0',
-  menuHover: '#38332c',
-  menuBorder: 'rgba(242,236,224,0.12)',
+  menuHover: '#352b44',
+  menuBorder: 'rgba(183,155,240,0.45)',
   danger: '#d36363',
 };
 
