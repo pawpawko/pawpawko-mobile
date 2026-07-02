@@ -114,12 +114,12 @@ export default function TradesScreen() {
       if (mode === 'initial') setLoading(true);
       if (mode === 'pull') setRefreshing(true);
       const { data, error } = await supabase.rpc('search_binders', {
-        p_boroughs: boroughs.length ? boroughs : null,
-        p_subways: subways.length ? subways : null,
-        p_shop: shop.trim() || null,
+        p_boroughs: boroughs.length ? boroughs : undefined,
+        p_subways: subways.length ? subways : undefined,
+        p_shop: shop.trim() || undefined,
         p_category: category,
-        p_city: city || null,
-        p_card_codes: parseCards(),
+        p_city: city || undefined,
+        p_card_codes: parseCards() ?? undefined,
       });
       if (mode === 'initial') setLoading(false);
       if (mode === 'pull') setRefreshing(false);

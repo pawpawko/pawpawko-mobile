@@ -205,7 +205,9 @@ export default function ProfileScreen() {
           display_name: name,
           display_name_set: true,
           discord_handle: discord.trim() || null,
-          city: city || null,
+          // profiles.city is NOT NULL DEFAULT 'nyc' — omit when empty so the
+          // insert takes the default / the update keeps the existing value.
+          city: city || undefined,
           boroughs,
           subway_stops: city === 'nyc' ? subways : [],
           local_shops: shops,

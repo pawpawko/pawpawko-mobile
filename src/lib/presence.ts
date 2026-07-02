@@ -55,7 +55,7 @@ export async function pingPresence(eventCode: string | null): Promise<StartResul
   const { error } = await supabase.rpc('upsert_presence', {
     p_lat: coords.lat,
     p_lng: coords.lng,
-    p_event_code: eventCode,
+    p_event_code: eventCode ?? undefined,
   });
   if (error) {
     console.warn('upsert_presence', error.message);
@@ -79,7 +79,7 @@ export async function fetchNearbyTradeBinders(
   const { data, error } = await supabase.rpc('nearby_trade_binders', {
     p_lat: lat,
     p_lng: lng,
-    p_event_code: eventCode,
+    p_event_code: eventCode ?? undefined,
   });
   if (error) {
     console.warn('nearby_trade_binders', error.message);
@@ -97,7 +97,7 @@ export async function fetchWishlistMatches(
   const { data, error } = await supabase.rpc('nearby_wishlist_matches', {
     p_lat: lat,
     p_lng: lng,
-    p_event_code: eventCode,
+    p_event_code: eventCode ?? undefined,
   });
   if (error) {
     console.warn('nearby_wishlist_matches', error.message);

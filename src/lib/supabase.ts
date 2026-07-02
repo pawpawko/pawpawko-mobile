@@ -2,6 +2,8 @@ import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
+import type { Database } from './database.types';
+
 const SUPABASE_URL = 'https://cligjmfhxvazjarbvexp.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_MbXa-DQ33D9VSMHhHho0Xg_kZ65QHtt';
 
@@ -13,7 +15,10 @@ const SUPABASE_ANON_KEY = 'sb_publishable_MbXa-DQ33D9VSMHhHho0Xg_kZ65QHtt';
 // and only changes the behaviour of the never-actually-used Node SSR pass.
 const isServer = typeof window === 'undefined';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+// Regenerate database.types.ts after any schema change:
+//   npx supabase gen types typescript --linked > src/lib/database.types.ts
+// (run from the pawpawko-site checkout, which holds the supabase/ CLI link)
+export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: isServer
     ? { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
     : {
