@@ -16,7 +16,7 @@ import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/lib/theme';
 
-type Game = 'optcg' | 'pokemon';
+type Game = 'optcg' | 'pokemon' | 'cyberpunk';
 
 type TradeMatch = {
   game: Game;
@@ -33,8 +33,9 @@ type TradeMatch = {
 const GAME_LABEL: Record<Game, string> = {
   optcg: 'ONE PIECE',
   pokemon: 'POKÉMON',
+  cyberpunk: 'CYBERPUNK',
 };
-const GAME_ORDER: Game[] = ['optcg', 'pokemon'];
+const GAME_ORDER: Game[] = ['optcg', 'pokemon', 'cyberpunk'];
 
 export default function TradeMatchesScreen() {
   const { partnerId } = useLocalSearchParams<{ partnerId: string }>();
@@ -89,9 +90,11 @@ export default function TradeMatchesScreen() {
 
   const sections = useMemo(() => {
     if (!matches) return [];
-    const buckets: Record<Game, TradeMatch[]> = { optcg: [], pokemon: [] };
+    const buckets: Record<Game, TradeMatch[]> = { optcg: [], pokemon: [], cyberpunk: [] };
     for (const m of matches) {
-      if (m.game === 'optcg' || m.game === 'pokemon') buckets[m.game].push(m);
+      if (m.game === 'optcg' || m.game === 'pokemon' || m.game === 'cyberpunk') {
+        buckets[m.game].push(m);
+      }
     }
     return GAME_ORDER
       .filter((g) => buckets[g].length > 0)

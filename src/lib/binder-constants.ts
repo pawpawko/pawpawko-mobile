@@ -24,6 +24,22 @@ export const POKEMON_RARITIES = [
 ];
 export const POKEMON_HP_BUCKETS = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300];
 
+// Cyberpunk TCG: color + card_type, classifications (tags, the types[] column),
+// RAM (deck-building stat), rarities. Mirrors web binder-view.js /
+// scripts/import_cyberpunk_cards.py.
+export const CYBERPUNK_COLORS = ['Red', 'Blue', 'Green', 'Yellow'];
+export const CYBERPUNK_TYPES = ['Legend', 'Unit', 'Gear', 'Program'];
+export const CYBERPUNK_RARITIES = ['Common', 'Uncommon', 'Rare', 'Epic'];
+export const CYBERPUNK_RAM = [1, 2, 3, 4, 5, 6];
+export const CYBERPUNK_COSTS = Array.from({ length: 9 }, (_, i) => i + 1); // 1..9
+export const CYBERPUNK_TAGS = [
+  '6th Street', 'Aldecado', 'Arasaka', 'Braindance', 'Corpo', 'Cyberware', 'Doll',
+  'Drone', 'Extreme', 'Ganger', 'Maelstrom', 'Merc', 'Militech', 'Mox', 'Mystic',
+  'NCPD', 'Netrunner', 'Nomad', 'Quickhack', 'Raffen Shiv', 'Ripperdoc', 'Rocker',
+  'Samurai', 'Scavenger', 'Trauma Team', 'Tyger Claws', 'Valentino', 'Vehicle',
+  'Voodoo Boys', 'Weapon', 'Zetatech',
+];
+
 export const COLOR_ORDER = ['Red', 'Blue', 'Green', 'Purple', 'Black', 'Yellow'];
 
 // Mirrors the web CSS flair palette: trade blue, wishlist purple, flex tan,
@@ -39,6 +55,7 @@ export const FLAIR_STYLES: Record<string, { label: string; color: string }> = {
 export const CATEGORY_STYLES: Record<string, { label: string; color: string }> = {
   optcg: { label: 'One Piece', color: '#c9956a' },
   pokemon: { label: 'Pokémon', color: '#e8b757' },
+  cyberpunk: { label: 'Cyberpunk', color: '#5aa9bf' },
 };
 
 export const LISTING_TYPES = [
@@ -56,6 +73,7 @@ export type SortMode =
   | 'release'
   | 'color'
   | 'cost'
+  | 'ram'
   | 'ptype'
   | 'hp'
   | 'supertype';
@@ -75,6 +93,15 @@ export const SORT_MODES_POKEMON: { value: SortMode; label: string }[] = [
   { value: 'ptype', label: 'Element type' },
   { value: 'hp', label: 'HP' },
   { value: 'supertype', label: 'Supertype' },
+];
+
+export const SORT_MODES_CYBERPUNK: { value: SortMode; label: string }[] = [
+  { value: 'custom-4x3', label: 'Custom (4×3)' },
+  { value: 'custom-3x3', label: 'Custom (3×3)' },
+  { value: 'release', label: 'Release order' },
+  { value: 'color', label: 'Color' },
+  { value: 'cost', label: 'Cost' },
+  { value: 'ram', label: 'RAM' },
 ];
 
 export const PAGE_SIZE = { '3x3': 9, '4x3': 12 } as const;

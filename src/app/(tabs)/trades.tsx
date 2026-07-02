@@ -82,7 +82,7 @@ export default function TradesScreen() {
   // Restore last-game choice
   useEffect(() => {
     AsyncStorage.getItem(LAST_GAME_KEY).then((g) => {
-      if (g === 'optcg' || g === 'pokemon') setCategory(g);
+      if (g === 'optcg' || g === 'pokemon' || g === 'cyberpunk') setCategory(g);
     });
   }, []);
 
@@ -102,8 +102,11 @@ export default function TradesScreen() {
       .map((s) => s.trim())
       .filter(Boolean);
     if (raw.length === 0) return null;
-    // OPTCG uppercase, Pokémon lowercase (matches search_binders RPC expectations)
-    return raw.map((c) => (category === 'pokemon' ? c.toLowerCase() : c.toUpperCase()));
+    // OPTCG uppercase; Pokémon + Cyberpunk (cb-…) lowercase — matches
+    // search_binders RPC / card_code casing per game.
+    return raw.map((c) =>
+      category === 'pokemon' || category === 'cyberpunk' ? c.toLowerCase() : c.toUpperCase(),
+    );
   }, [cardsInput, category]);
 
   const load = useCallback(
@@ -191,9 +194,17 @@ export default function TradesScreen() {
           <TextInput
             value={cardsInput}
             onChangeText={setCardsInput}
-            placeholder={category === 'pokemon' ? 'sv1-1, sv3pt5-160, …' : 'OP01-001, ST15-003, …'}
+            placeholder={
+              category === 'pokemon'
+                ? 'sv1-1, sv3pt5-160, …'
+                : category === 'cyberpunk'
+                  ? 'cb-v-streetkid-wnc-005a, …'
+                  : 'OP01-001, ST15-003, …'
+            }
             placeholderTextColor={colors.textMuted}
-            autoCapitalize={category === 'pokemon' ? 'none' : 'characters'}
+            autoCapitalize={
+              category === 'pokemon' || category === 'cyberpunk' ? 'none' : 'characters'
+            }
             autoCorrect={false}
             style={styles.input}
           />

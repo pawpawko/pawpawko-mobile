@@ -39,6 +39,12 @@ import { useAuth } from '@/lib/auth';
 import { addCardToWishlist, type WishlistResult } from '@/lib/wishlist';
 import {
   COLOR_ORDER,
+  CYBERPUNK_COLORS,
+  CYBERPUNK_COSTS,
+  CYBERPUNK_RAM,
+  CYBERPUNK_RARITIES,
+  CYBERPUNK_TAGS,
+  CYBERPUNK_TYPES,
   LISTING_TYPES,
   OPTCG_ATTRIBUTES,
   OPTCG_COLORS,
@@ -51,6 +57,7 @@ import {
   POKEMON_SUBTYPES,
   POKEMON_SUPERTYPES,
   POKEMON_TYPES,
+  SORT_MODES_CYBERPUNK,
   SORT_MODES_OPTCG,
   SORT_MODES_POKEMON,
   type Layout,
@@ -100,6 +107,9 @@ type CardInfo = {
   types?: string[] | null;
   supertype?: string | null;
   hp?: number | null;
+  ram?: number | null; // Cyberpunk deck-building stat
+  type?: string | null; // Cyberpunk Legend/Unit/Gear/Program
+  rarity?: string | null;
   release_order?: number | null;
 };
 
@@ -245,7 +255,7 @@ export default function BinderDetailScreen() {
       const codes = Array.from(new Set(lst.map((l) => l.card_code)));
       const { data: cardRows, error: cErr } = await supabase
         .from('cards')
-        .select('card_code,name,image_url,image_url_lg,color,cost,types,supertype,hp,release_order')
+        .select('card_code,name,image_url,image_url_lg,color,cost,type,types,supertype,hp,ram,rarity,release_order')
         .eq('game', head.category)
         .in('card_code', codes);
       if (cErr) console.warn('cards', cErr.message);
@@ -544,7 +554,12 @@ export default function BinderDetailScreen() {
   }
   if (!header) return <Text style={styles.empty}>Binder not found.</Text>;
 
-  const sortOptions = header.category === 'pokemon' ? SORT_MODES_POKEMON : SORT_MODES_OPTCG;
+  const sortOptions =
+    header.category === 'pokemon'
+      ? SORT_MODES_POKEMON
+      : header.category === 'cyberpunk'
+        ? SORT_MODES_CYBERPUNK
+        : SORT_MODES_OPTCG;
   const numColumns = layout === '3x3' ? 3 : 4;
   const isWishlist = header.flair === 'wishlist';
   const total = displayListings.length;
@@ -897,6 +912,13 @@ function applySortMode(
     return out.sort(
       (a, b) =>
         (cardOf(a).cost ?? 99) - (cardOf(b).cost ?? 99) ||
+        String(a.card_code).localeCompare(b.card_code),
+    );
+  }
+  if (mode === 'ram') {
+    return out.sort(
+      (a, b) =>
+        (cardOf(a).ram ?? 99) - (cardOf(b).ram ?? 99) ||
         String(a.card_code).localeCompare(b.card_code),
     );
   }
@@ -1450,6 +1472,8 @@ type BrowserFilters = {
   supertype: string;
   subtype: string;
   hp: string; // HP minimum
+  tag: string; // Cyberpunk classification (types[])
+  ram: string; // Cyberpunk RAM
 };
 
 const EMPTY_FILTERS: BrowserFilters = {
@@ -1462,6 +1486,8 @@ const EMPTY_FILTERS: BrowserFilters = {
   supertype: '',
   subtype: '',
   hp: '',
+  tag: '',
+  ram: '',
 };
 
 function CardBrowserModal({
@@ -1534,7 +1560,9 @@ function CardBrowserModal({
       const projection =
         game === 'pokemon'
           ? 'card_code, name, series, type, types, supertype, subtypes, hp, rarity, image_url, image_url_lg, release_order'
-          : 'card_code, name, series, color, type, cost, attribute, rarity, image_url, image_url_lg, release_order';
+          : game === 'cyberpunk'
+            ? 'card_code, name, series, color, type, cost, ram, types, rarity, image_url, image_url_lg, release_order'
+            : 'card_code, name, series, color, type, cost, attribute, rarity, image_url, image_url_lg, release_order';
       let query = supabase
         .from('cards')
         .select(projection)
@@ -1552,6 +1580,12 @@ function CardBrowserModal({
         if (f.supertype) query = query.eq('supertype', f.supertype);
         if (f.subtype) query = query.contains('subtypes', [f.subtype]);
         if (f.hp) query = query.gte('hp', parseInt(f.hp, 10));
+      } else if (game === 'cyberpunk') {
+        if (f.color) query = query.eq('color', f.color); // colors are single-valued
+        if (f.type) query = query.eq('type', f.type); // Legend/Unit/Gear/Program
+        if (f.cost !== '') query = query.eq('cost', parseInt(f.cost, 10));
+        if (f.tag) query = query.contains('types', [f.tag]); // classifications text[]
+        if (f.ram !== '') query = query.eq('ram', parseInt(f.ram, 10));
       } else {
         if (f.color) query = query.ilike('color', `%${f.color}%`);
         if (f.type) query = query.eq('type', f.type);
@@ -1595,14 +1629,24 @@ function CardBrowserModal({
           { key: 'hp', label: 'HP ≥', options: POKEMON_HP_BUCKETS.map(String) },
           { key: 'rarity', label: 'Rarity', options: POKEMON_RARITIES },
         ]
-      : [
-          { key: 'series', label: 'Set', options: seriesOptions },
-          { key: 'color', label: 'Color', options: OPTCG_COLORS },
-          { key: 'type', label: 'Type', options: OPTCG_TYPES },
-          { key: 'cost', label: 'Cost', options: OPTCG_COSTS.map(String) },
-          { key: 'attribute', label: 'Attribute', options: OPTCG_ATTRIBUTES },
-          { key: 'rarity', label: 'Rarity', options: OPTCG_RARITIES },
-        ];
+      : game === 'cyberpunk'
+        ? [
+            { key: 'series', label: 'Set', options: seriesOptions },
+            { key: 'color', label: 'Color', options: CYBERPUNK_COLORS },
+            { key: 'type', label: 'Type', options: CYBERPUNK_TYPES },
+            { key: 'cost', label: 'Cost', options: CYBERPUNK_COSTS.map(String) },
+            { key: 'tag', label: 'Tag', options: CYBERPUNK_TAGS },
+            { key: 'ram', label: 'RAM', options: CYBERPUNK_RAM.map(String) },
+            { key: 'rarity', label: 'Rarity', options: CYBERPUNK_RARITIES },
+          ]
+        : [
+            { key: 'series', label: 'Set', options: seriesOptions },
+            { key: 'color', label: 'Color', options: OPTCG_COLORS },
+            { key: 'type', label: 'Type', options: OPTCG_TYPES },
+            { key: 'cost', label: 'Cost', options: OPTCG_COSTS.map(String) },
+            { key: 'attribute', label: 'Attribute', options: OPTCG_ATTRIBUTES },
+            { key: 'rarity', label: 'Rarity', options: OPTCG_RARITIES },
+          ];
 
 
   const activeFilterCount = Object.values(filters).filter((v) => v !== '').length;

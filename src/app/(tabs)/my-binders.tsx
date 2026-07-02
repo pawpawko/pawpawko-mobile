@@ -35,24 +35,27 @@ type Binder = {
   _shared?: boolean; // a binder shared WITH me (I'm a co-editor, not the owner)
 };
 
-type Category = 'optcg' | 'pokemon';
+type Category = 'optcg' | 'pokemon' | 'cyberpunk';
 type Flair = 'trade' | 'wishlist';
 
 const LAST_GAME_KEY = 'pawpaw:lastGame';
 const CATEGORIES: { value: Category; label: string }[] = [
   { value: 'optcg', label: 'OPTCG' },
   { value: 'pokemon', label: 'Pokémon' },
+  { value: 'cyberpunk', label: 'Cyberpunk' },
 ];
 const FLAIRS: { value: Flair; label: string }[] = [
   { value: 'trade', label: 'Trade' },
   { value: 'wishlist', label: 'Wishlist' },
 ];
 
-// OPTCG before Pokémon. Within each game, preserve created_at order from the query.
-const GAME_ORDER: Category[] = ['optcg', 'pokemon'];
+// OPTCG, then Pokémon, then Cyberpunk. Within each game, preserve created_at
+// order from the query.
+const GAME_ORDER: Category[] = ['optcg', 'pokemon', 'cyberpunk'];
 const GAME_LABEL: Record<Category, string> = {
   optcg: 'One Piece TCG',
   pokemon: 'Pokémon',
+  cyberpunk: 'Cyberpunk TCG',
 };
 
 function groupByGame(rows: Binder[]): { game: Category; data: Binder[] }[] {
@@ -335,7 +338,7 @@ function NewBinderModal({
     setErr('');
     setFlair('trade');
     AsyncStorage.getItem(LAST_GAME_KEY).then((g) => {
-      if (g === 'pokemon' || g === 'optcg') setCategory(g);
+      if (g === 'pokemon' || g === 'optcg' || g === 'cyberpunk') setCategory(g);
       else setCategory('optcg');
     });
   }, [visible]);
@@ -356,7 +359,9 @@ function NewBinderModal({
         /one_(trade|wishlist)_per_user_game/.test(error.message || '')
       ) {
         const flairName = flair === 'wishlist' ? 'wishlist' : 'trade';
-        const gameName = category === 'pokemon' ? 'Pokémon' : 'OPTCG';
+        const gameName =
+          ({ pokemon: 'Pokémon', cyberpunk: 'Cyberpunk', optcg: 'OPTCG' } as const)[category] ??
+          'OPTCG';
         setErr(`You already have a ${flairName} binder for ${gameName}. Only one per game is allowed.`);
       } else {
         setErr(error.message);

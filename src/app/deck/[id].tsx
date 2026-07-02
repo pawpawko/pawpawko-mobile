@@ -17,6 +17,7 @@ import {
   View,
 } from 'react-native';
 
+import { CyberpunkDeckEditor } from '@/components/cyberpunk-deck-editor';
 import { DiceLoader } from '@/components/dice-loader';
 import { useAuth } from '@/lib/auth';
 import {
@@ -270,6 +271,12 @@ export default function DeckEditorScreen() {
       return;
     }
     setDeck(d as DeckRow);
+    // Non-default TCG (e.g. cyberpunk) has its own self-contained editor; skip
+    // the One Piece leader/card/art loading below and let the render dispatch.
+    if ((d as DeckRow).game === 'cyberpunk') {
+      setLoading(false);
+      return;
+    }
     const lmap = await lookupCards([d.leader_card_code]);
     setLeader(lmap[d.leader_card_code] ?? null);
 
@@ -688,6 +695,12 @@ export default function DeckEditorScreen() {
         <DiceLoader />
       </View>
     );
+  }
+
+  // TCG-module dispatch: cyberpunk decks use their own self-contained editor.
+  // One Piece has no module and falls through to the unchanged editor below.
+  if (deck.game === 'cyberpunk') {
+    return <CyberpunkDeckEditor deck={deck} isOwner={isOwner} />;
   }
 
   const sorted = cards.slice().sort((a, b) => {
