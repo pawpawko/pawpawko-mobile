@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -20,8 +20,10 @@ import {
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
 import { useAuth } from '@/lib/auth';
+import { cacheKeys, readCache, writeCache } from '@/lib/offline-cache';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type Binder = {
   id: string;
@@ -33,24 +35,27 @@ type Binder = {
   _shared?: boolean; // a binder shared WITH me (I'm a co-editor, not the owner)
 };
 
-type Category = 'optcg' | 'pokemon';
+type Category = 'optcg' | 'pokemon' | 'cyberpunk';
 type Flair = 'trade' | 'wishlist';
 
 const LAST_GAME_KEY = 'pawpaw:lastGame';
 const CATEGORIES: { value: Category; label: string }[] = [
   { value: 'optcg', label: 'OPTCG' },
   { value: 'pokemon', label: 'Pokémon' },
+  { value: 'cyberpunk', label: 'Cyberpunk' },
 ];
 const FLAIRS: { value: Flair; label: string }[] = [
   { value: 'trade', label: 'Trade' },
   { value: 'wishlist', label: 'Wishlist' },
 ];
 
-// OPTCG before Pokémon. Within each game, preserve created_at order from the query.
-const GAME_ORDER: Category[] = ['optcg', 'pokemon'];
+// OPTCG, then Pokémon, then Cyberpunk. Within each game, preserve created_at
+// order from the query.
+const GAME_ORDER: Category[] = ['optcg', 'pokemon', 'cyberpunk'];
 const GAME_LABEL: Record<Category, string> = {
   optcg: 'One Piece TCG',
   pokemon: 'Pokémon',
+  cyberpunk: 'Cyberpunk TCG',
 };
 
 function groupByGame(rows: Binder[]): { game: Category; data: Binder[] }[] {
@@ -69,22 +74,41 @@ export default function MyBindersScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const load = useCallback(
     async (mode: 'initial' | 'focus' | 'pull' = 'focus') => {
       if (!session?.user.id) return;
+      const uid = session.user.id;
       if (mode === 'initial') setLoading(true);
       if (mode === 'pull') setRefreshing(true);
-      const [ownRes, sharedRes] = await Promise.all([
+
+      // Instant paint from cache on the first load (also the offline path):
+      // own binders + their counts. Shared binders stay online-only.
+      if (mode === 'initial' && !hasLoadedOnce.current) {
+        const cached = await readCache<{ own: Binder[]; counts: Record<string, number> }>(
+          cacheKeys.myBinders(uid),
+        );
+        if (cached) {
+          setRows(cached.own);
+          setCounts(cached.counts);
+          setLoading(false);
+        }
+      }
+
+      const fetched = await Promise.all([
         supabase
           .from('binders')
           .select('id,name,description,category,flair,sleeve_image_url')
-          .eq('user_id', session.user.id)
+          .eq('user_id', uid)
           .order('created_at', { ascending: true }),
         supabase.rpc('shared_binders'), // binders shared WITH me
-      ]);
+      ]).catch(() => null);
       if (mode === 'initial') setLoading(false);
       if (mode === 'pull') setRefreshing(false);
+      if (!fetched) return; // offline / transport error — keep the cached view
+      const [ownRes, sharedRes] = fetched;
       hasLoadedOnce.current = true;
       if (ownRes.error) {
         console.warn('binders fetch error', ownRes.error.message);
@@ -111,8 +135,13 @@ export default function MyBindersScreen() {
             .eq('binder_id', b.id);
           return [b.id, count ?? 0] as const;
         }),
-      );
+      ).catch(() => null);
+      if (!entries) return;
       setCounts(Object.fromEntries(entries));
+      // Cache OWN binders + their counts for offline (scope: my binders only).
+      const ownIds = new Set(own.map((b) => b.id));
+      const ownCounts = Object.fromEntries(entries.filter(([bid]) => ownIds.has(bid)));
+      void writeCache(cacheKeys.myBinders(uid), { own, counts: ownCounts });
     },
     [session?.user.id],
   );
@@ -137,10 +166,10 @@ export default function MyBindersScreen() {
         options={{
           headerRight: () => (
             <Pressable
-              onPress={() => setNewOpen(true)}
+              onPress={() => router.push({ pathname: '/scan', params: { scope: 'card' } })}
               style={({ pressed }) => ({ paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
-              accessibilityLabel="New binder">
-              <Ionicons name="add" size={26} color={colors.accent} />
+              accessibilityLabel="Scan a card into a binder">
+              <Ionicons name="camera-outline" size={24} color={colors.accent} />
             </Pressable>
           ),
         }}
@@ -161,7 +190,7 @@ export default function MyBindersScreen() {
             />
           }>
           {groups.length === 0 ? (
-            <Text style={styles.empty}>No binders yet — tap + to create one.</Text>
+            <Text style={styles.empty}>No binders yet — tap the + button to create one.</Text>
           ) : (
             groups.map(({ game, data }) => (
               <GameSection
@@ -175,6 +204,13 @@ export default function MyBindersScreen() {
           )}
         </ScrollView>
       )}
+
+      <Pressable
+        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+        onPress={() => setNewOpen(true)}
+        accessibilityLabel="New binder">
+        <Ionicons name="add" size={32} color={colors.bgPrimary} />
+      </Pressable>
 
       <NewBinderModal
         visible={newOpen}
@@ -200,12 +236,29 @@ function GameSection({
   counts: Record<string, number>;
   onOpen: (id: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.groupWrap}>
-      <Text style={styles.groupTitle}>{GAME_LABEL[game].toUpperCase()}</Text>
-      {binders.map((b) => (
-        <BinderCard key={b.id} binder={b} count={counts[b.id] ?? 0} onPress={() => onOpen(b.id)} />
-      ))}
+      <Pressable
+        onPress={() => setCollapsed((c) => !c)}
+        style={({ pressed }) => [styles.groupHeader, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+        accessibilityLabel={`${collapsed ? 'Expand' : 'Collapse'} ${GAME_LABEL[game]}`}>
+        <Ionicons
+          name={collapsed ? 'chevron-forward' : 'chevron-down'}
+          size={16}
+          color={colors.textSecondary}
+        />
+        <Text style={styles.groupTitle}>{GAME_LABEL[game].toUpperCase()}</Text>
+        <Text style={styles.groupCount}>{binders.length}</Text>
+      </Pressable>
+      {collapsed
+        ? null
+        : binders.map((b) => (
+            <BinderCard key={b.id} binder={b} count={counts[b.id] ?? 0} onPress={() => onOpen(b.id)} />
+          ))}
     </View>
   );
 }
@@ -219,6 +272,8 @@ function BinderCard({
   count: number;
   onPress: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const hasCover = !!binder.sleeve_image_url;
   return (
     <Pressable
@@ -273,6 +328,8 @@ function NewBinderModal({
   const [flair, setFlair] = useState<Flair>('trade');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Default category to whatever the user last picked (across the app)
   useEffect(() => {
@@ -281,7 +338,7 @@ function NewBinderModal({
     setErr('');
     setFlair('trade');
     AsyncStorage.getItem(LAST_GAME_KEY).then((g) => {
-      if (g === 'pokemon' || g === 'optcg') setCategory(g);
+      if (g === 'pokemon' || g === 'optcg' || g === 'cyberpunk') setCategory(g);
       else setCategory('optcg');
     });
   }, [visible]);
@@ -302,7 +359,9 @@ function NewBinderModal({
         /one_(trade|wishlist)_per_user_game/.test(error.message || '')
       ) {
         const flairName = flair === 'wishlist' ? 'wishlist' : 'trade';
-        const gameName = category === 'pokemon' ? 'Pokémon' : 'OPTCG';
+        const gameName =
+          ({ pokemon: 'Pokémon', cyberpunk: 'Cyberpunk', optcg: 'OPTCG' } as const)[category] ??
+          'OPTCG';
         setErr(`You already have a ${flairName} binder for ${gameName}. Only one per game is allowed.`);
       } else {
         setErr(error.message);
@@ -382,6 +441,8 @@ function PillRow({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.pillRow}>
       {options.map((opt) => {
@@ -403,22 +464,54 @@ function PillRow({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
-  scrollContent: { paddingBottom: 32 },
+  scrollContent: { paddingBottom: 96 },
   empty: { textAlign: 'center', marginTop: 48, color: colors.textMuted, fontFamily: fonts.body },
+
+  // Floating "new binder" button — pinned to the bottom of the screen, above
+  // the tab bar.
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 6,
+  },
+  fabPressed: { backgroundColor: colors.accentLight },
 
   // ---- Game section ----
   groupWrap: { paddingHorizontal: 16, paddingTop: 24 },
-  groupTitle: {
-    fontFamily: fonts.serif,
-    fontSize: 12,
-    letterSpacing: 3,
-    color: colors.textSecondary,
+  groupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingBottom: 8,
     marginBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  groupTitle: {
+    flex: 1,
+    fontFamily: fonts.serif,
+    fontSize: 12,
+    letterSpacing: 3,
+    color: colors.textSecondary,
+  },
+  groupCount: {
+    fontFamily: fonts.serif,
+    fontSize: 12,
+    letterSpacing: 1,
+    color: colors.textMuted,
   },
 
   // ---- Binder card ----
@@ -441,7 +534,7 @@ const styles = StyleSheet.create({
   },
   cardBody: { padding: 14 },
   cardName: {
-    fontFamily: fonts.serif,
+    fontFamily: fonts.display,
     fontSize: 16,
     letterSpacing: 0.5,
     color: colors.textPrimary,
@@ -513,7 +606,7 @@ const styles = StyleSheet.create({
   pillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   pillPressed: { backgroundColor: colors.bgCardHover },
   pillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  pillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  pillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 6 },
   submitBtn: {
     backgroundColor: colors.accent,
@@ -525,7 +618,7 @@ const styles = StyleSheet.create({
   submitBtnPressed: { backgroundColor: colors.accentLight },
   submitBtnDisabled: { opacity: 0.4 },
   submitBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     letterSpacing: 2,
     fontSize: 13,

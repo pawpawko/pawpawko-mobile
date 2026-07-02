@@ -8,11 +8,15 @@ import { View, type TextStyle } from 'react-native';
 import { DiceLoader } from '@/components/dice-loader';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AutoSearchProvider } from '@/lib/auto-search-context';
+import { ConnectivityProvider } from '@/lib/connectivity';
 import { NotificationsProvider } from '@/lib/notifications-context';
+import { SyncProvider } from '@/lib/sync-queue';
 import { colors } from '@/lib/theme';
+import { ThemeProvider, useTheme } from '@/lib/theme-context';
 
 function AuthGate() {
   const { session, loading, needsSetup } = useAuth();
+  const { colors, theme } = useTheme();
   const segments = useSegments();
   const router = useRouter();
 
@@ -43,14 +47,19 @@ function AuthGate() {
   // can bounce them to /profile when needsSetup turns true.
   if (loading || (session && needsSetup === null)) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary }}>
-        <DiceLoader />
-      </View>
+      <>
+        <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary }}>
+          <DiceLoader />
+        </View>
+      </>
     );
   }
 
   return (
-    <Stack
+    <>
+      <StatusBar style={theme === 'dark' ? 'light' : 'dark'} />
+      <Stack
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: colors.bgPrimary },
@@ -122,7 +131,8 @@ function AuthGate() {
           headerTitleStyle: { fontFamily: 'Cinzel_700Bold', letterSpacing: 3, fontSize: 14 } as TextStyle,
         }}
       />
-    </Stack>
+      </Stack>
+    </>
   );
 }
 
@@ -139,13 +149,18 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <AutoSearchProvider>
-        <NotificationsProvider>
-          <StatusBar style="light" />
-          <AuthGate />
-        </NotificationsProvider>
-      </AutoSearchProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <ConnectivityProvider>
+        <AuthProvider>
+          <SyncProvider>
+            <AutoSearchProvider>
+              <NotificationsProvider>
+                <AuthGate />
+              </NotificationsProvider>
+            </AutoSearchProvider>
+          </SyncProvider>
+        </AuthProvider>
+      </ConnectivityProvider>
+    </ThemeProvider>
   );
 }

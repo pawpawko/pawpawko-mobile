@@ -1,17 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, type ReactNode } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, type TextStyle, View } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
 import { useNotifications, type AppNotification } from '@/lib/notifications-context';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts } from '@/lib/theme';
+import { fonts, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 export default function NotificationsScreen() {
   const router = useRouter();
   const { items, reload, markAllRead, dismiss, respond } = useNotifications();
   const { session } = useAuth();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Opening the screen marks everything read (clears the bell badge), mirroring
   // the web dropdown behaviour.
@@ -234,7 +237,7 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   row: {
     paddingVertical: 14,
@@ -250,7 +253,7 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 8, marginTop: 10 },
   btn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   btnAccept: { backgroundColor: colors.accent, borderColor: colors.accent },
-  btnAcceptText: { color: colors.bgPrimary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  btnAcceptText: { color: colors.onAccent, fontFamily: fonts.bodyBold, fontSize: 13 },
   btnDecline: { borderColor: colors.border },
   btnDeclineText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13 },
   dismiss: { position: 'absolute', top: 10, right: 10, padding: 4 },

@@ -93,14 +93,11 @@ export default function TradeTapScreen() {
                 <QRCode
                   value={tradeTapUrl}
                   size={240}
-                  backgroundColor={colors.textPrimary}
-                  color={colors.bgPrimary}
+                  backgroundColor={colors.bgSecondary}
+                  color={colors.textPrimary}
                 />
               ) : null}
             </View>
-            <Text style={styles.qrHint}>
-              Show this to a partner so they can scan it from the camera button on Trades.
-            </Text>
           </Pressable>
         </Pressable>
       </Modal>
@@ -141,7 +138,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnPressed: { backgroundColor: colors.accentLight },
   primaryBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 14,
     letterSpacing: 3,

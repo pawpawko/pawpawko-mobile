@@ -34,10 +34,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
+import { SyncStatusBar } from '@/components/sync-status';
 import { useAuth } from '@/lib/auth';
 import { addCardToWishlist, type WishlistResult } from '@/lib/wishlist';
 import {
   COLOR_ORDER,
+  CYBERPUNK_COLORS,
+  CYBERPUNK_COSTS,
+  CYBERPUNK_RAM,
+  CYBERPUNK_RARITIES,
+  CYBERPUNK_TAGS,
+  CYBERPUNK_TYPES,
   LISTING_TYPES,
   OPTCG_ATTRIBUTES,
   OPTCG_COLORS,
@@ -50,15 +57,19 @@ import {
   POKEMON_SUBTYPES,
   POKEMON_SUPERTYPES,
   POKEMON_TYPES,
+  SORT_MODES_CYBERPUNK,
   SORT_MODES_OPTCG,
   SORT_MODES_POKEMON,
   type Layout,
   type ListingType,
   type SortMode,
 } from '@/lib/binder-constants';
+import { cacheKeys, readCache, writeCache } from '@/lib/offline-cache';
 import { binderShareUrl } from '@/lib/slug';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { enqueue, newId, pendingForBinder } from '@/lib/sync-queue';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type Flair = 'trade' | 'wishlist';
 const FLAIR_OPTIONS: { value: Flair; label: string }[] = [
@@ -96,13 +107,25 @@ type CardInfo = {
   types?: string[] | null;
   supertype?: string | null;
   hp?: number | null;
+  ram?: number | null; // Cyberpunk deck-building stat
+  type?: string | null; // Cyberpunk Legend/Unit/Gear/Program
+  rarity?: string | null;
   release_order?: number | null;
+};
+
+// Snapshot persisted to the offline cache for own binders.
+type BinderSnapshot = {
+  header: BinderHeader;
+  listings: Listing[];
+  cardsById: Record<string, CardInfo>;
 };
 
 export default function BinderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { session } = useAuth();
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [header, setHeader] = useState<BinderHeader | null>(null);
   const [listings, setListings] = useState<Listing[]>([]);
@@ -133,6 +156,10 @@ export default function BinderDetailScreen() {
 
   // Existing
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  // Deck-origin enrichment for owner wishlist binders: deck_id → deck name.
+  const [decksById, setDecksById] = useState<Record<string, { id: string; name: string | null }>>({});
+  const [deckFilter, setDeckFilter] = useState(''); // '' | '__deck__' | '__manual__' | <deckId>
+
   const [shareOpen, setShareOpen] = useState(false);
 
   const shareUrl = id && header ? binderShareUrl(header.display_name, header.binder_name, id) : '';
@@ -182,8 +209,19 @@ export default function BinderDetailScreen() {
   // ---- Initial load ----
   const loadAll = useCallback(async (opts?: { silent?: boolean }) => {
     if (!id) return;
-    if (!opts?.silent) setLoading(true);
-    const [hRes, lRes] = await Promise.all([
+    if (!opts?.silent) {
+      setLoading(true);
+      // Instant paint from cache (also the offline path). The network refresh
+      // below overrides it; un-synced edits are kept by the merge guard.
+      const cached = await readCache<BinderSnapshot>(cacheKeys.binder(id));
+      if (cached) {
+        setHeader(cached.header);
+        if (pendingForBinder(id) === 0) setListings(cached.listings);
+        setCards(cached.cardsById);
+        setLoading(false);
+      }
+    }
+    const res = await Promise.all([
       supabase.rpc('get_binder_public', { p_binder_id: id }),
       canEdit
         ? supabase
@@ -196,20 +234,28 @@ export default function BinderDetailScreen() {
             // last page, which is where the add flow navigates to.
             .order('created_at', { ascending: true })
         : supabase.rpc('get_binder_listings_public', { p_binder_id: id }),
-    ]);
+    ]).catch(() => null);
+    if (!res) {
+      // Offline / transport error — keep whatever we hydrated from cache.
+      if (!opts?.silent) setLoading(false);
+      return;
+    }
+    const [hRes, lRes] = res;
     if (hRes.error) console.warn('header', hRes.error.message);
     if (lRes.error) console.warn('listings', lRes.error.message);
 
     const head: BinderHeader | null = Array.isArray(hRes.data) ? hRes.data[0] : hRes.data;
     const lst: Listing[] = (lRes.data ?? []) as Listing[];
     setHeader(head);
-    setListings(lst);
+    // Merge-on-refresh guard: a server snapshot must not clobber un-synced
+    // optimistic edits (last-write-wins keeps them until the queue flushes).
+    if (pendingForBinder(id) === 0) setListings(lst);
 
     if (head && lst.length > 0) {
       const codes = Array.from(new Set(lst.map((l) => l.card_code)));
       const { data: cardRows, error: cErr } = await supabase
         .from('cards')
-        .select('card_code,name,image_url,image_url_lg,color,cost,types,supertype,hp,release_order')
+        .select('card_code,name,image_url,image_url_lg,color,cost,type,types,supertype,hp,ram,rarity,release_order')
         .eq('game', head.category)
         .in('card_code', codes);
       if (cErr) console.warn('cards', cErr.message);
@@ -231,6 +277,43 @@ export default function BinderDetailScreen() {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // Persist this binder for offline viewing whenever its displayed data
+  // changes (owner only — scope is "my binders"). Captures optimistic edits
+  // too, so reopening offline shows un-synced changes.
+  useEffect(() => {
+    if (!id || !isOwner || !header) return;
+    void writeCache(cacheKeys.binder(id), { header, listings, cardsById: cards });
+  }, [id, isOwner, header, listings, cards]);
+
+  // Deck-origin lookup (owner + wishlist only): the auto wishlist-sync stamps
+  // deck-sourced rows with listings.deck_id; map those ids → deck names so the
+  // tile/detail can show a 🃏 pill and the "For deck" filter can list them.
+  // Owner-only — anon viewers never receive deck_id (the public RPC omits it).
+  useEffect(() => {
+    if (!isOwner || header?.flair !== 'wishlist') {
+      setDecksById({});
+      return;
+    }
+    const deckIds = [...new Set(listings.map((l) => l.deck_id).filter(Boolean))] as string[];
+    if (!deckIds.length) {
+      setDecksById({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from('decks').select('id, name').in('id', deckIds);
+      if (cancelled) return;
+      const m: Record<string, { id: string; name: string | null }> = {};
+      (data ?? []).forEach((d: any) => {
+        m[d.id] = d;
+      });
+      setDecksById(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [listings, isOwner, header?.flair]);
 
   // ---- Realtime: a co-editor's card change refreshes this binder live ----
   // (public.listings is in the Realtime publication.) Skipped during a drag so
@@ -257,6 +340,30 @@ export default function BinderDetailScreen() {
 
   // ---- Sort listings according to active sortMode ----
   const sortedListings = applySortMode(listings, cards, sortMode);
+
+  // "For deck" filter (owner wishlist): the decks present among deck-synced rows.
+  const deckPillOptions = useMemo(
+    () =>
+      ([...new Set(listings.map((l) => l.deck_id).filter(Boolean))] as string[])
+        .filter((did) => decksById[did])
+        .map((did) => ({ id: did, name: decksById[did].name || 'Deck' }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [listings, decksById],
+  );
+  // Drop a stale per-deck selection if that deck is no longer present.
+  const effDeckFilter =
+    deckFilter && deckFilter !== '__deck__' && deckFilter !== '__manual__' && !decksById[deckFilter]
+      ? ''
+      : deckFilter;
+  // Edit/reorder always sees the full set; browse honors the deck filter.
+  const displayListings =
+    editMode || !effDeckFilter
+      ? sortedListings
+      : sortedListings.filter((l) => {
+          if (effDeckFilter === '__deck__') return !!l.deck_id;
+          if (effDeckFilter === '__manual__') return !l.deck_id;
+          return l.deck_id === effDeckFilter;
+        });
 
   // Reset page if it overflows the new total
   useEffect(() => {
@@ -336,50 +443,53 @@ export default function BinderDetailScreen() {
       setSortMode(next === '3x3' ? 'custom-3x3' : 'custom-4x3');
     }
     setCurrentPage(1);
-    if (!id) return;
+    // binders-row writes are owner-only (binders_update RLS). Collaborators keep an
+    // ephemeral local layout but must not attempt the persist (it would RLS-reject).
+    if (!id || !isOwner) return;
     const { error } = await supabase.from('binders').update({ layout: next }).eq('id', id);
     if (error) console.warn('layout save failed:', error.message);
   }
 
   async function addListing(card: CardInfo, qty: number, ltype: ListingType) {
     if (!id) return false;
-    const { data, error } = await supabase
-      .from('listings')
-      .insert({ binder_id: id, card_code: card.card_code, quantity: qty, listing_type: ltype })
-      .select('id, quantity, listing_type, card_code, sort_order')
-      .single();
-    if (error) {
-      Alert.alert('Could not add listing', error.message);
-      return false;
-    }
-    setListings((ls) => [...ls, data as Listing]);
+    // Optimistic insert with a client-generated id (also the op's idempotency
+    // key). New rows have no sort_order yet → they sort to the end, matching
+    // the server default.
+    const listingId = newId();
+    const row: Listing = {
+      id: listingId,
+      card_code: card.card_code,
+      quantity: qty,
+      listing_type: ltype,
+      sort_order: null,
+    };
+    setListings((ls) => [...ls, row]);
     // Ensure card metadata is in the lookup
     setCards((map) => (map[card.card_code] ? map : { ...map, [card.card_code]: card }));
+    void enqueue({
+      kind: 'add',
+      binderId: id,
+      listingId,
+      cardCode: card.card_code,
+      quantity: qty,
+      listingType: ltype,
+    });
     return true;
   }
 
   async function updateListing(listingId: string, qty: number, ltype: ListingType) {
-    const { error } = await supabase
-      .from('listings')
-      .update({ quantity: qty, listing_type: ltype })
-      .eq('id', listingId);
-    if (error) {
-      Alert.alert('Could not update listing', error.message);
-      return false;
-    }
     setListings((ls) =>
       ls.map((l) => (l.id === listingId ? { ...l, quantity: qty, listing_type: ltype } : l)),
     );
+    if (id) {
+      void enqueue({ kind: 'update', binderId: id, listingId, quantity: qty, listingType: ltype });
+    }
     return true;
   }
 
   async function removeListing(listingId: string) {
-    const { error } = await supabase.from('listings').delete().eq('id', listingId);
-    if (error) {
-      Alert.alert('Could not remove listing', error.message);
-      return false;
-    }
     setListings((ls) => ls.filter((l) => l.id !== listingId));
+    if (id) void enqueue({ kind: 'remove', binderId: id, listingId });
     return true;
   }
 
@@ -388,67 +498,51 @@ export default function BinderDetailScreen() {
   // this wishlist row. Manual rows just decrement (and delete at zero). Mirrors
   // the web markReceived/persistReceive flow.
   async function markReceived(l: Listing) {
-    if (l.deck_id) {
-      const { data: dc } = await supabase
-        .from('deck_cards')
-        .select('quantity, owned')
-        .eq('deck_id', l.deck_id)
-        .eq('card_code', l.card_code)
-        .maybeSingle();
-      if (dc) {
-        const newOwned = Math.min(dc.quantity, (dc.owned ?? 0) + 1);
-        await supabase
-          .from('deck_cards')
-          .update({ owned: newOwned })
-          .eq('deck_id', l.deck_id)
-          .eq('card_code', l.card_code);
-      } else {
-        await supabase.from('listings').delete().eq('id', l.id);
-      }
-    } else {
-      const { data: cur } = await supabase
-        .from('listings')
-        .select('quantity')
-        .eq('id', l.id)
-        .maybeSingle();
-      if (!cur) return;
-      if ((cur.quantity ?? 1) > 1) {
-        await supabase.from('listings').update({ quantity: cur.quantity - 1 }).eq('id', l.id);
-      } else {
-        await supabase.from('listings').delete().eq('id', l.id);
-      }
+    // Optimistic: a received copy shrinks the wishlist row by one (the server
+    // does the same — manual rows decrement; deck-synced rows shrink via the
+    // sync trigger after the deck's owned count goes up). The op replays the
+    // exact server logic, re-reading the current quantity at flush time.
+    setListings((ls) =>
+      ls.flatMap((x) => {
+        if (x.id !== l.id) return [x];
+        const q = (x.quantity ?? 1) - 1;
+        return q > 0 ? [{ ...x, quantity: q }] : [];
+      }),
+    );
+    if (id) {
+      void enqueue({
+        kind: 'markReceived',
+        binderId: id,
+        listingId: l.id,
+        cardCode: l.card_code,
+        deckId: l.deck_id ?? null,
+      });
     }
-    await loadAll({ silent: true });
   }
 
   async function removeAllForCard(cardCode: string) {
     if (!id) return false;
-    const { error } = await supabase
-      .from('listings')
-      .delete()
-      .eq('binder_id', id)
-      .eq('card_code', cardCode);
-    if (error) {
-      Alert.alert('Could not remove listings', error.message);
-      return false;
-    }
     setListings((ls) => ls.filter((l) => l.card_code !== cardCode));
+    void enqueue({ kind: 'removeAllForCard', binderId: id, cardCode });
     return true;
   }
 
   // Persist a freshly-ordered listings array by writing sort_order = index for each row.
   async function persistPositions(reordered: Listing[]) {
-    setListings(reordered.map((l, i) => ({ ...l, sort_order: i })));
-    const payload = reordered.map((l, i) => ({
-      id: l.id,
-      sort_order: i,
-      binder_id: id!,
-      card_code: l.card_code,
-      quantity: l.quantity,
-      listing_type: l.listing_type,
-    }));
-    const { error } = await supabase.from('listings').upsert(payload, { onConflict: 'id' });
-    if (error) console.warn('reorder save failed:', error.message);
+    const next = reordered.map((l, i) => ({ ...l, sort_order: i }));
+    setListings(next);
+    if (!id) return;
+    void enqueue({
+      kind: 'reorder',
+      binderId: id,
+      order: next.map((l, i) => ({
+        id: l.id,
+        sort_order: i,
+        card_code: l.card_code,
+        quantity: l.quantity,
+        listing_type: l.listing_type,
+      })),
+    });
   }
 
   if (loading) {
@@ -460,13 +554,18 @@ export default function BinderDetailScreen() {
   }
   if (!header) return <Text style={styles.empty}>Binder not found.</Text>;
 
-  const sortOptions = header.category === 'pokemon' ? SORT_MODES_POKEMON : SORT_MODES_OPTCG;
+  const sortOptions =
+    header.category === 'pokemon'
+      ? SORT_MODES_POKEMON
+      : header.category === 'cyberpunk'
+        ? SORT_MODES_CYBERPUNK
+        : SORT_MODES_OPTCG;
   const numColumns = layout === '3x3' ? 3 : 4;
   const isWishlist = header.flair === 'wishlist';
-  const total = sortedListings.length;
+  const total = displayListings.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const pageStart = (currentPage - 1) * pageSize;
-  const pageItems = sortedListings.slice(pageStart, pageStart + pageSize);
+  const pageItems = displayListings.slice(pageStart, pageStart + pageSize);
 
   const showDraggable = editMode && aestheticsMode && (sortMode === 'custom-3x3' || sortMode === 'custom-4x3');
 
@@ -520,6 +619,8 @@ export default function BinderDetailScreen() {
           </View>
         </View>
 
+        <SyncStatusBar binderId={id} />
+
         {editMode ? (
           <EditToolbar
             aestheticsMode={aestheticsMode}
@@ -547,9 +648,42 @@ export default function BinderDetailScreen() {
           />
         ) : null}
 
+        {!editMode && isOwner && isWishlist && deckPillOptions.length > 0 ? (
+          <View style={styles.deckFilterBar}>
+            <Text style={styles.deckFilterLabel}>For deck</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.deckFilterPills}>
+              {[
+                { id: '', label: 'All' },
+                { id: '__deck__', label: 'Deck cards' },
+                { id: '__manual__', label: 'Manual' },
+                ...deckPillOptions.map((d) => ({ id: d.id, label: `🃏 ${d.name}` })),
+              ].map((opt) => (
+                <Pressable
+                  key={opt.id || 'all'}
+                  onPress={() => {
+                    setDeckFilter(opt.id);
+                    setCurrentPage(1);
+                  }}
+                  style={[styles.dfPill, effDeckFilter === opt.id && styles.dfPillActive]}>
+                  <Text style={[styles.dfPillText, effDeckFilter === opt.id && styles.dfPillTextActive]}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
         {total === 0 ? (
           <Text style={styles.empty}>
-            {editMode ? 'No cards yet. Tap "Add cards".' : 'No cards in this binder yet.'}
+            {editMode
+              ? 'No cards yet. Tap "Add cards".'
+              : effDeckFilter
+                ? 'No cards match this deck filter.'
+                : 'No cards in this binder yet.'}
           </Text>
         ) : showDraggable ? (
           <DraggableFlatList
@@ -599,8 +733,9 @@ export default function BinderDetailScreen() {
           />
         ) : (
           <BinderPager
-            listings={sortedListings}
+            listings={displayListings}
             cards={cards}
+            decksById={decksById}
             numColumns={numColumns}
             pageSize={pageSize}
             currentPage={currentPage}
@@ -719,8 +854,9 @@ export default function BinderDetailScreen() {
       <CardPagerModal
         visible={expandedIdx !== null}
         onClose={() => setExpandedIdx(null)}
-        listings={sortedListings}
+        listings={displayListings}
         cards={cards}
+        decksById={decksById}
         initialIndex={expandedIdx ?? 0}
         isWishlist={isWishlist}
         onReceive={
@@ -779,6 +915,13 @@ function applySortMode(
         String(a.card_code).localeCompare(b.card_code),
     );
   }
+  if (mode === 'ram') {
+    return out.sort(
+      (a, b) =>
+        (cardOf(a).ram ?? 99) - (cardOf(b).ram ?? 99) ||
+        String(a.card_code).localeCompare(b.card_code),
+    );
+  }
   if (mode === 'ptype') {
     const rank = (l: Listing) => {
       const t = (cardOf(l).types || [])[0];
@@ -824,6 +967,8 @@ function EditToolbar({
   onAddCards: () => void;
   onOpenSettings?: () => void; // owner-only; hidden for collaborators
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.toolbar}>
       <Pressable
@@ -867,6 +1012,8 @@ function SortPicker({
   options: { value: SortMode; label: string }[];
   onChange: (m: SortMode) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.sortPicker}>
       <FlatList
@@ -901,6 +1048,8 @@ function Pagination({
   totalPages: number;
   onChange: (p: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.pagination}>
       <Pressable
@@ -925,6 +1074,7 @@ function Pagination({
 function BinderPager({
   listings,
   cards,
+  decksById,
   numColumns,
   pageSize,
   currentPage,
@@ -934,6 +1084,7 @@ function BinderPager({
 }: {
   listings: Listing[];
   cards: Record<string, CardInfo>;
+  decksById: Record<string, { id: string; name: string | null }>;
   numColumns: number;
   pageSize: number;
   currentPage: number;
@@ -941,6 +1092,8 @@ function BinderPager({
   onCardPress: (absoluteIdx: number) => void;
   isWishlist: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [pageHeight, setPageHeight] = useState(0);
   const listRef = useRef<FlatList<Listing[]>>(null);
@@ -1050,6 +1203,11 @@ function BinderPager({
                         ]}
                       />
                     )}
+                    {isWishlist && l.deck_id && decksById[l.deck_id] ? (
+                      <View style={styles.deckTileBadge}>
+                        <Text style={styles.deckTileBadgeText}>🃏</Text>
+                      </View>
+                    ) : null}
                     <Text style={[styles.cardCode, { width: cardW }]} numberOfLines={1}>
                       {l.card_code}
                     </Text>
@@ -1081,6 +1239,8 @@ function DraggableTile({
   numColumns: number;
   isWishlist: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const card = cards[item.card_code];
   return (
     <ScaleDecorator>
@@ -1129,6 +1289,8 @@ function EditBinderModal({
   onSaveFlair: (next: Flair) => Promise<void>;
   onDelete: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [name, setName] = useState(currentName);
   const [savingName, setSavingName] = useState(false);
 
@@ -1310,6 +1472,8 @@ type BrowserFilters = {
   supertype: string;
   subtype: string;
   hp: string; // HP minimum
+  tag: string; // Cyberpunk classification (types[])
+  ram: string; // Cyberpunk RAM
 };
 
 const EMPTY_FILTERS: BrowserFilters = {
@@ -1322,6 +1486,8 @@ const EMPTY_FILTERS: BrowserFilters = {
   supertype: '',
   subtype: '',
   hp: '',
+  tag: '',
+  ram: '',
 };
 
 function CardBrowserModal({
@@ -1335,6 +1501,8 @@ function CardBrowserModal({
   game: string;
   onPickCard: (allResults: CardInfo[], index: number) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<BrowserFilters>(EMPTY_FILTERS);
   const [seriesOptions, setSeriesOptions] = useState<string[]>([]);
@@ -1392,7 +1560,9 @@ function CardBrowserModal({
       const projection =
         game === 'pokemon'
           ? 'card_code, name, series, type, types, supertype, subtypes, hp, rarity, image_url, image_url_lg, release_order'
-          : 'card_code, name, series, color, type, cost, attribute, rarity, image_url, image_url_lg, release_order';
+          : game === 'cyberpunk'
+            ? 'card_code, name, series, color, type, cost, ram, types, rarity, image_url, image_url_lg, release_order'
+            : 'card_code, name, series, color, type, cost, attribute, rarity, image_url, image_url_lg, release_order';
       let query = supabase
         .from('cards')
         .select(projection)
@@ -1410,6 +1580,12 @@ function CardBrowserModal({
         if (f.supertype) query = query.eq('supertype', f.supertype);
         if (f.subtype) query = query.contains('subtypes', [f.subtype]);
         if (f.hp) query = query.gte('hp', parseInt(f.hp, 10));
+      } else if (game === 'cyberpunk') {
+        if (f.color) query = query.eq('color', f.color); // colors are single-valued
+        if (f.type) query = query.eq('type', f.type); // Legend/Unit/Gear/Program
+        if (f.cost !== '') query = query.eq('cost', parseInt(f.cost, 10));
+        if (f.tag) query = query.contains('types', [f.tag]); // classifications text[]
+        if (f.ram !== '') query = query.eq('ram', parseInt(f.ram, 10));
       } else {
         if (f.color) query = query.ilike('color', `%${f.color}%`);
         if (f.type) query = query.eq('type', f.type);
@@ -1453,14 +1629,24 @@ function CardBrowserModal({
           { key: 'hp', label: 'HP ≥', options: POKEMON_HP_BUCKETS.map(String) },
           { key: 'rarity', label: 'Rarity', options: POKEMON_RARITIES },
         ]
-      : [
-          { key: 'series', label: 'Set', options: seriesOptions },
-          { key: 'color', label: 'Color', options: OPTCG_COLORS },
-          { key: 'type', label: 'Type', options: OPTCG_TYPES },
-          { key: 'cost', label: 'Cost', options: OPTCG_COSTS.map(String) },
-          { key: 'attribute', label: 'Attribute', options: OPTCG_ATTRIBUTES },
-          { key: 'rarity', label: 'Rarity', options: OPTCG_RARITIES },
-        ];
+      : game === 'cyberpunk'
+        ? [
+            { key: 'series', label: 'Set', options: seriesOptions },
+            { key: 'color', label: 'Color', options: CYBERPUNK_COLORS },
+            { key: 'type', label: 'Type', options: CYBERPUNK_TYPES },
+            { key: 'cost', label: 'Cost', options: CYBERPUNK_COSTS.map(String) },
+            { key: 'tag', label: 'Tag', options: CYBERPUNK_TAGS },
+            { key: 'ram', label: 'RAM', options: CYBERPUNK_RAM.map(String) },
+            { key: 'rarity', label: 'Rarity', options: CYBERPUNK_RARITIES },
+          ]
+        : [
+            { key: 'series', label: 'Set', options: seriesOptions },
+            { key: 'color', label: 'Color', options: OPTCG_COLORS },
+            { key: 'type', label: 'Type', options: OPTCG_TYPES },
+            { key: 'cost', label: 'Cost', options: OPTCG_COSTS.map(String) },
+            { key: 'attribute', label: 'Attribute', options: OPTCG_ATTRIBUTES },
+            { key: 'rarity', label: 'Rarity', options: OPTCG_RARITIES },
+          ];
 
 
   const activeFilterCount = Object.values(filters).filter((v) => v !== '').length;
@@ -1618,6 +1804,8 @@ function FilterPickerSheet({
   onPick: (v: string) => void;
   onClose: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.shareBackdrop} onPress={onClose}>
@@ -1678,6 +1866,8 @@ function ListingFormSheet({
   onDestroy?: () => Promise<void>;
   destroyLabel?: string;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [qty, setQty] = useState(String(initialQty));
   const [ltype, setLtype] = useState<ListingType>(initialType);
   const [busy, setBusy] = useState(false);
@@ -1794,6 +1984,8 @@ function AddListingPager({
   onAddToWishlist: ((card: CardInfo) => Promise<WishlistResult>) | null;
   isWishlist: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [qty, setQty] = useState('1');
@@ -2091,6 +2283,8 @@ function SwipeableDeckPage({
   // from the resting position. We mirror it into translateY (negative) for
   // the card transform but drive the overlay interpolations off the
   // positive magnitude so all thresholds stay readable.
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const pull = useSharedValue(0);
 
   const pan = Gesture.Pan()
@@ -2230,6 +2424,7 @@ function CardPagerModal({
   onClose,
   listings,
   cards,
+  decksById,
   initialIndex,
   isWishlist,
   onReceive,
@@ -2238,10 +2433,13 @@ function CardPagerModal({
   onClose: () => void;
   listings: Listing[];
   cards: Record<string, CardInfo>;
+  decksById: Record<string, { id: string; name: string | null }>;
   initialIndex: number;
   isWishlist: boolean;
   onReceive?: (l: Listing) => void; // owner "Got it" on a wishlist card
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const [currentIdx, setCurrentIdx] = useState(initialIndex);
   const listRef = useRef<FlatList<Listing>>(null);
@@ -2288,6 +2486,11 @@ function CardPagerModal({
                 )}
                 <Text style={styles.modalCardName}>{card?.name ?? item.card_code}</Text>
                 <Text style={styles.modalCode}>{item.card_code}</Text>
+                {isWishlist && item.deck_id && decksById[item.deck_id] ? (
+                  <View style={styles.deckOriginPill}>
+                    <Text style={styles.deckOriginPillText}>🃏 {decksById[item.deck_id]!.name || 'deck'}</Text>
+                  </View>
+                ) : null}
                 {!isWishlist ? (
                   <>
                     <View style={styles.modalRow}>
@@ -2322,9 +2525,52 @@ function CardPagerModal({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary },
   grid: { padding: 8 },
+
+  // "For deck" filter bar (owner wishlist) + deck-origin pills
+  deckFilterBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  deckFilterLabel: {
+    color: colors.textMuted,
+    fontFamily: fonts.body,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  deckFilterPills: { gap: 6, paddingRight: 12 },
+  dfPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgCard,
+  },
+  dfPillActive: { backgroundColor: '#4d9de0', borderColor: '#4d9de0' },
+  dfPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
+  dfPillTextActive: { color: '#0c0a12', fontFamily: fonts.bodyBold },
+  deckTileBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: 'rgba(77,157,224,0.92)',
+    borderRadius: 999,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  deckTileBadgeText: { fontSize: 10 },
+  deckOriginPill: {
+    alignSelf: 'center',
+    marginTop: 8,
+    backgroundColor: 'rgba(77,157,224,0.18)',
+    borderColor: '#4d9de0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  deckOriginPillText: { color: '#9cc7ee', fontFamily: fonts.bodyBold, fontSize: 12 },
   header: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
   title: { fontSize: 22, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
   titleOwner: { fontSize: 18, color: colors.textSecondary, fontFamily: fonts.body },
@@ -2350,7 +2596,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.accent,
   },
-  enterEditBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
+  enterEditBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
   doneBtnText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
 
   toolbar: {
@@ -2405,7 +2651,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     includeFontPadding: false,
   },
-  sortChipTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  sortChipTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
 
   pagination: {
     flexDirection: 'row',
@@ -2475,7 +2721,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 18,
   },
-  gotItText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
+  gotItText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
   modalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2515,7 +2761,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   shareBtnPressed: { backgroundColor: colors.accentLight },
-  shareBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
+  shareBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
 
   pagerCount: {
     position: 'absolute',
@@ -2563,7 +2809,7 @@ const styles = StyleSheet.create({
   },
   editPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   editPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  editPillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  editPillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
   editSaveDisabled: { opacity: 0.4 },
   manageBtn: {
     flexDirection: 'row',
@@ -2617,7 +2863,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  partnerInviteBtnText: { color: colors.bgPrimary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  partnerInviteBtnText: { color: colors.onAccent, fontFamily: fonts.bodyBold, fontSize: 13 },
   partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
 
   sheetImg: { width: 140, aspectRatio: 0.72, alignSelf: 'center', borderRadius: radius.sm },
@@ -2794,7 +3040,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   applyBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     letterSpacing: 2,
     fontSize: 13,

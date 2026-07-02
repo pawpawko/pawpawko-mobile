@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Modal,
@@ -24,7 +24,8 @@ import {
   type BinderCategory,
 } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type BinderRow = {
   binder_id: string;
@@ -75,11 +76,13 @@ export default function TradesScreen() {
   const [rows, setRows] = useState<BinderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Restore last-game choice
   useEffect(() => {
     AsyncStorage.getItem(LAST_GAME_KEY).then((g) => {
-      if (g === 'optcg' || g === 'pokemon') setCategory(g);
+      if (g === 'optcg' || g === 'pokemon' || g === 'cyberpunk') setCategory(g);
     });
   }, []);
 
@@ -99,8 +102,11 @@ export default function TradesScreen() {
       .map((s) => s.trim())
       .filter(Boolean);
     if (raw.length === 0) return null;
-    // OPTCG uppercase, Pokémon lowercase (matches search_binders RPC expectations)
-    return raw.map((c) => (category === 'pokemon' ? c.toLowerCase() : c.toUpperCase()));
+    // OPTCG uppercase; Pokémon + Cyberpunk (cb-…) lowercase — matches
+    // search_binders RPC / card_code casing per game.
+    return raw.map((c) =>
+      category === 'pokemon' || category === 'cyberpunk' ? c.toLowerCase() : c.toUpperCase(),
+    );
   }, [cardsInput, category]);
 
   const load = useCallback(
@@ -188,9 +194,17 @@ export default function TradesScreen() {
           <TextInput
             value={cardsInput}
             onChangeText={setCardsInput}
-            placeholder={category === 'pokemon' ? 'sv1-1, sv3pt5-160, …' : 'OP01-001, ST15-003, …'}
+            placeholder={
+              category === 'pokemon'
+                ? 'sv1-1, sv3pt5-160, …'
+                : category === 'cyberpunk'
+                  ? 'cb-v-streetkid-wnc-005a, …'
+                  : 'OP01-001, ST15-003, …'
+            }
             placeholderTextColor={colors.textMuted}
-            autoCapitalize={category === 'pokemon' ? 'none' : 'characters'}
+            autoCapitalize={
+              category === 'pokemon' || category === 'cyberpunk' ? 'none' : 'characters'
+            }
             autoCorrect={false}
             style={styles.input}
           />
@@ -310,6 +324,8 @@ export default function TradesScreen() {
 }
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Pressable
       onPress={onPress}
@@ -333,6 +349,8 @@ function MultiSelectField({
   emptyLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const summary =
     selected.length === 0
@@ -420,7 +438,7 @@ function MultiSelectField({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   tabBar: { flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.border, backgroundColor: colors.bgSecondary },
   tab: { flex: 1, paddingVertical: 14, alignItems: 'center' },
@@ -546,7 +564,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sheetDoneBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     letterSpacing: 2,
     fontSize: 13,
@@ -567,7 +585,7 @@ const styles = StyleSheet.create({
   filterButtons: { flexDirection: 'row', gap: 8, marginTop: 12 },
   applyBtn: { flex: 1, padding: 12, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
   applyBtnPressed: { backgroundColor: colors.accentLight },
-  applyBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
+  applyBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
   clearBtn: { flex: 1, padding: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.borderAccent, alignItems: 'center' },
   clearBtnPressed: { backgroundColor: colors.bgCard },
   clearBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
@@ -590,7 +608,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   matchBadgeText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 11,
     letterSpacing: 1.5,

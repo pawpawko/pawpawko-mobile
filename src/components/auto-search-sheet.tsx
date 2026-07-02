@@ -274,7 +274,7 @@ const styles = StyleSheet.create({
   },
   viewBtnPressed: { backgroundColor: colors.accentLight },
   viewBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 13,
     letterSpacing: 2,

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -31,12 +31,19 @@ import {
   parseDecklist,
   standardLegal,
 } from '@/lib/decks';
+import {
+  createCyberpunkDeck,
+  lookupCardImages,
+  searchCyberpunkCards,
+  type CpCardInfo,
+} from '@/lib/decks-cyberpunk';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 type Format = 'standard' | 'eternal';
 
-type DeckTile = DeckRow & { leader?: CardInfo; valid?: boolean; total?: number; _shared?: boolean };
+type DeckTile = DeckRow & { leader?: { image_url: string | null }; valid?: boolean; total?: number; _shared?: boolean };
 
 export default function DecksScreen() {
   const { session } = useAuth();
@@ -47,6 +54,8 @@ export default function DecksScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const load = useCallback(
     async (mode: 'initial' | 'focus' | 'pull' = 'focus') => {
@@ -66,9 +75,9 @@ export default function DecksScreen() {
       const shared = ((sharedRes.data ?? []) as DeckRow[]).map((d) => ({ ...d, _shared: true }));
       const rows = [...own, ...shared];
       const leaderCodes = [...new Set(rows.map((d) => d.leader_card_code))];
-      const leaderMap: Record<string, CardInfo> = leaderCodes.length
-        ? await lookupCards(leaderCodes)
-        : {};
+      // game-agnostic image lookup (codes are prefix-disjoint) so cyberpunk
+      // deck tiles show their Legend art too.
+      const leaderMap = leaderCodes.length ? await lookupCardImages(leaderCodes) : {};
       const validity = await Promise.all(rows.map((d) => fetchValidity(d.id)));
       if (mode === 'initial') setLoading(false);
       if (mode === 'pull') setRefreshing(false);
@@ -96,18 +105,6 @@ export default function DecksScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <Pressable
-              onPress={() => setNewOpen(true)}
-              style={({ pressed }) => ({ paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
-              accessibilityLabel="New deck">
-              <Ionicons name="add" size={26} color={colors.accent} />
-            </Pressable>
-          ),
-        }}
-      />
       {loading && tiles.length === 0 ? (
         <View style={{ alignItems: 'center', marginTop: 32 }}>
           <DiceLoader />
@@ -173,6 +170,8 @@ const TONE: Record<string, string> = {
 };
 
 function Badge({ label, tone }: { label: string; tone: keyof typeof TONE | string }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const color = TONE[tone] ?? colors.textMuted;
   return (
     <View style={[styles.badge, { borderColor: color }]}>
@@ -192,15 +191,19 @@ function NewDeckModal({
   userId: string | undefined;
   onCreated: (deckId: string) => void;
 }) {
+  const [game, setGame] = useState<'optcg' | 'cyberpunk'>('optcg');
   const [format, setFormat] = useState<Format>('standard');
   const [list, setList] = useState('');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<CardInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   useEffect(() => {
     if (!visible) return;
+    setGame('optcg');
     setFormat('standard');
     setList('');
     setQuery('');
@@ -311,6 +314,21 @@ function NewDeckModal({
             </Pressable>
             <Text style={styles.modalTitle}>NEW DECK</Text>
 
+            <Text style={styles.label}>Game</Text>
+            <View style={styles.pillRow}>
+              {(['optcg', 'cyberpunk'] as const).map((g) => (
+                <Pressable key={g} onPress={() => setGame(g)} style={[styles.pill, game === g && styles.pillActive]}>
+                  <Text style={[styles.pillText, game === g && styles.pillTextActive]}>
+                    {g === 'optcg' ? 'One Piece' : 'Cyberpunk'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {game === 'cyberpunk' ? (
+              <CyberpunkCreate userId={userId} onCreated={onCreated} />
+            ) : (
+              <>
             <Text style={styles.label}>Format</Text>
             <View style={styles.pillRow}>
               {(['standard', 'eternal'] as Format[]).map((f) => (
@@ -367,6 +385,8 @@ function NewDeckModal({
                 </Pressable>
               ))}
             </ScrollView>
+              </>
+            )}
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -374,9 +394,113 @@ function NewDeckModal({
   );
 }
 
+// Cyberpunk deck create: pick exactly 3 different-named Legends, then create.
+function CyberpunkCreate({ userId, onCreated }: { userId: string | undefined; onCreated: (id: string) => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<CpCardInfo[]>([]);
+  const [chosen, setChosen] = useState<CpCardInfo[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await searchCyberpunkCards({ legendOnly: true, name: q });
+      if (!cancelled) setResults(r);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  const pick = (leg: CpCardInfo) => {
+    if (chosen.length >= 3 || chosen.some((x) => x.name === leg.name)) return;
+    setChosen([...chosen, leg]);
+  };
+  const create = async () => {
+    if (!userId || chosen.length !== 3 || busy) return;
+    setBusy(true);
+    setErr('');
+    const res = await createCyberpunkDeck(userId, chosen.map((c) => c.card_code));
+    setBusy(false);
+    if (res.id) onCreated(res.id);
+    else setErr(res.error ?? 'Could not create deck.');
+  };
+
+  return (
+    <>
+      <Text style={styles.label}>Legends ({chosen.length}/3)</Text>
+      <View style={{ gap: 6, marginTop: 6 }}>
+        {chosen.map((c, i) => (
+          <View key={c.card_code} style={styles.resultRow}>
+            {c.image_url ? (
+              <Image source={{ uri: c.image_url }} style={styles.resultImg} contentFit="cover" />
+            ) : (
+              <View style={[styles.resultImg, styles.deckImgEmpty]} />
+            )}
+            <Text style={[styles.resultName, { flex: 1 }]} numberOfLines={1}>
+              {c.name}
+            </Text>
+            <Pressable onPress={() => setChosen(chosen.filter((_, j) => j !== i))} style={{ padding: 6 }}>
+              <Ionicons name="close" size={18} color={colors.textMuted} />
+            </Pressable>
+          </View>
+        ))}
+      </View>
+
+      <Pressable
+        onPress={create}
+        disabled={chosen.length !== 3 || busy}
+        style={[styles.createBtn, (chosen.length !== 3 || busy) && { opacity: 0.4 }]}>
+        <Text style={styles.createBtnText}>
+          {busy ? 'Creating…' : chosen.length === 3 ? 'Create deck' : `Pick ${3 - chosen.length} more`}
+        </Text>
+      </Pressable>
+      {err ? <Text style={styles.err}>{err}</Text> : null}
+
+      <Text style={styles.label}>Search Legends</Text>
+      <TextInput
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Search Legends…"
+        placeholderTextColor={colors.textMuted}
+        autoCapitalize="none"
+        style={styles.input}
+      />
+      <ScrollView style={styles.results} keyboardShouldPersistTaps="handled">
+        {results.map((c) => (
+          <Pressable key={c.card_code} style={styles.resultRow} onPress={() => pick(c)}>
+            {c.image_url ? (
+              <Image source={{ uri: c.image_url }} style={styles.resultImg} contentFit="cover" />
+            ) : (
+              <View style={[styles.resultImg, styles.deckImgEmpty]} />
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.resultName} numberOfLines={1}>
+                {c.name}
+              </Text>
+              <Text style={styles.resultSub}>
+                {c.color} · RAM {c.ram ?? '?'}
+              </Text>
+            </View>
+          </Pressable>
+        ))}
+      </ScrollView>
+    </>
+  );
+}
+
 const TILE_GAP = 12;
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   scrollContent: { padding: 16, paddingBottom: 32 },
   empty: { textAlign: 'center', marginTop: 32, color: colors.textMuted, fontFamily: fonts.body },
@@ -405,7 +529,7 @@ const styles = StyleSheet.create({
   deckImg: { width: '100%', aspectRatio: 0.72 },
   deckImgEmpty: { backgroundColor: colors.bgCard },
   deckBody: { padding: 8 },
-  deckName: { color: colors.textPrimary, fontFamily: fonts.serif, fontSize: 12, marginBottom: 5 },
+  deckName: { color: colors.textPrimary, fontFamily: fonts.display, fontSize: 12, marginBottom: 5 },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 1 },
   badgeText: { fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', fontFamily: fonts.body },
@@ -453,8 +577,10 @@ const styles = StyleSheet.create({
   },
   pillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   pillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  pillTextActive: { color: colors.bgPrimary, fontFamily: fonts.serifBold },
+  pillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
   err: { color: colors.danger, fontFamily: fonts.body, fontSize: 13, marginTop: 8 },
+  createBtn: { marginTop: 12, backgroundColor: colors.accent, borderRadius: radius.sm, paddingVertical: 12, alignItems: 'center' },
+  createBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 14, letterSpacing: 1 },
 
   results: { marginTop: 8, maxHeight: 240 },
   resultRow: {

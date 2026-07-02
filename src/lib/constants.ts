@@ -19,6 +19,7 @@ export const BOROUGHS_BY_CITY: Record<string, string[]> = {
 export const BINDER_CATEGORIES = [
   { value: 'optcg', label: 'One Piece' },
   { value: 'pokemon', label: 'Pokémon' },
+  { value: 'cyberpunk', label: 'Cyberpunk' },
 ] as const;
 
 export type BinderCategory = (typeof BINDER_CATEGORIES)[number]['value'];

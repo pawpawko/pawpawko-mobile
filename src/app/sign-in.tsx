@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -7,7 +7,8 @@ import Svg, { Path } from 'react-native-svg';
 import { signInWithDiscord } from '@/lib/discord-auth';
 import { signInWithGoogle } from '@/lib/google-auth';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 function GoogleIcon() {
   return (
@@ -49,6 +50,8 @@ export default function SignInScreen() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [oauthBusy, setOauthBusy] = useState<'google' | 'discord' | null>(null);
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   async function googleSubmit() {
     setOauthBusy('google');
@@ -177,7 +180,7 @@ export default function SignInScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bgPrimary },
   flex: { flex: 1 },
   container: { flex: 1, justifyContent: 'center', padding: 24, gap: 14 },
@@ -227,7 +230,7 @@ const styles = StyleSheet.create({
   buttonPressed: { backgroundColor: colors.accentLight },
   buttonDisabled: { opacity: 0.4 },
   buttonText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 14,
     letterSpacing: 2,

@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Tabs, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useState } from 'react';
+import { Pressable, View } from 'react-native';
 import Animated, {
   Easing,
   cancelAnimation,
@@ -14,9 +14,10 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AutoSearchSheet } from '@/components/auto-search-sheet';
+import { BookOpenIcon, CardsIcon } from '@/components/tab-icons';
 import { useAutoSearch } from '@/lib/auto-search-context';
-import { useNotifications } from '@/lib/notifications-context';
-import { colors, fonts } from '@/lib/theme';
+import { fonts } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 // Visible header chrome (below the status bar) is HEADER_CONTENT_H tall.
 // HEADER_TITLE_PAD_BOTTOM is the breathing space between the Jolly and the
@@ -24,8 +25,9 @@ import { colors, fonts } from '@/lib/theme';
 const HEADER_CONTENT_H = 96;
 const HEADER_TITLE_PAD_BOTTOM = 4;
 
-function HeaderJollyButton({ onPress }: { onPress: () => void }) {
+const HeaderJollyButton = memo(function HeaderJollyButton({ onPress }: { onPress: () => void }) {
   const { active } = useAutoSearch();
+  const { colors } = useTheme();
   const pulse = useSharedValue(0);
 
   useEffect(() => {
@@ -91,52 +93,14 @@ function HeaderJollyButton({ onPress }: { onPress: () => void }) {
       </View>
     </Pressable>
   );
-}
-
-// Notifications bell (header-left on every tab) with an unread badge.
-function NotificationBell() {
-  const router = useRouter();
-  const { unread } = useNotifications();
-  return (
-    <Pressable
-      onPress={() => router.push('/notifications')}
-      style={({ pressed }) => ({
-        paddingLeft: 14,
-        paddingRight: 16,
-        paddingVertical: 10,
-        opacity: pressed ? 0.6 : 1,
-      })}
-      accessibilityLabel="Notifications">
-      <View>
-        <Ionicons name="notifications-outline" size={24} color={colors.accent} />
-        {unread > 0 ? (
-          <View
-            style={{
-              position: 'absolute',
-              top: -5,
-              right: -7,
-              minWidth: 16,
-              height: 16,
-              borderRadius: 8,
-              paddingHorizontal: 3,
-              backgroundColor: colors.danger,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-            <Text style={{ color: '#fff', fontSize: 10, fontFamily: fonts.bodyBold }}>
-              {unread > 9 ? '9+' : String(unread)}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-    </Pressable>
-  );
-}
+});
 
 export default function TabsLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const openSheet = useCallback(() => setSheetOpen(true), []);
   return (
     <>
       <Tabs
@@ -150,16 +114,14 @@ export default function TabsLayout() {
           },
           headerStatusBarHeight: insets.top,
           headerTintColor: colors.textPrimary,
-          headerTitle: () => <HeaderJollyButton onPress={() => setSheetOpen(true)} />,
+          headerTitle: () => <HeaderJollyButton onPress={openSheet} />,
           headerTitleAlign: 'center',
           headerTitleContainerStyle: { paddingBottom: HEADER_TITLE_PAD_BOTTOM },
-          headerLeft: () => <NotificationBell />,
-          headerLeftContainerStyle: { paddingLeft: 0 },
           headerRightContainerStyle: { paddingRight: 0 },
           tabBarStyle: { backgroundColor: colors.bgSecondary, borderTopColor: colors.border },
           tabBarActiveTintColor: colors.accent,
           tabBarInactiveTintColor: colors.textMuted,
-          tabBarLabelStyle: { fontFamily: fonts.body, fontSize: 11, letterSpacing: 1 },
+          tabBarLabelStyle: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 1 },
           sceneStyle: { backgroundColor: colors.bgPrimary },
         }}>
         <Tabs.Screen
@@ -169,7 +131,7 @@ export default function TabsLayout() {
             tabBarIcon: ({ color, size }) => <Ionicons name="search" size={size} color={color} />,
             headerRight: () => (
               <Pressable
-                onPress={() => router.push('/scan')}
+                onPress={() => router.push({ pathname: '/scan', params: { scope: 'qr' } })}
                 style={({ pressed }) => ({
                   paddingLeft: 16,
                   paddingRight: 14,
@@ -186,14 +148,14 @@ export default function TabsLayout() {
           name="my-binders"
           options={{
             title: '',
-            tabBarIcon: ({ color, size }) => <Ionicons name="albums-outline" size={size} color={color} />,
+            tabBarIcon: ({ color, size }) => <BookOpenIcon color={color} size={size} />,
           }}
         />
         <Tabs.Screen
           name="decks"
           options={{
             title: '',
-            tabBarIcon: ({ color, size }) => <Ionicons name="layers-outline" size={size} color={color} />,
+            tabBarIcon: ({ color, size }) => <CardsIcon color={color} size={size} />,
           }}
         />
         <Tabs.Screen

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -17,8 +18,10 @@ import {
 import { DiceLoader } from '@/components/dice-loader';
 import { useAuth } from '@/lib/auth';
 import { BOROUGHS_BY_CITY, CITIES } from '@/lib/constants';
+import { useNotifications } from '@/lib/notifications-context';
 import { supabase } from '@/lib/supabase';
-import { colors, fonts, radius } from '@/lib/theme';
+import { fonts, radius, type Palette } from '@/lib/theme';
+import { useTheme } from '@/lib/theme-context';
 
 const NYC_SUBWAY_STOPS = [
   'Times Sq-42 St', 'Grand Central-42 St', '34 St-Penn Station', '34 St-Herald Sq',
@@ -41,7 +44,10 @@ export default function ProfileScreen() {
   const { session, refreshSetup } = useAuth();
   const userId = session?.user.id;
   const router = useRouter();
+  const { unread } = useNotifications();
   const scrollRef = useRef<ScrollView>(null);
+  const { colors, theme, toggle: toggleTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // Dev-only tester for Trade Matches. Picks the first non-self user with a
   // trade binder and routes to /trade-matches/<their-uuid>. Will be removed
@@ -246,9 +252,37 @@ export default function ProfileScreen() {
     <KeyboardAvoidingView
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Pressable
+              onPress={() => router.push('/notifications')}
+              style={({ pressed }) => ({ paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
+              accessibilityLabel="Notifications">
+              <Ionicons name="notifications-outline" size={24} color={colors.accent} />
+              {unread > 0 ? (
+                <View style={styles.headerBadge}>
+                  <Text style={styles.headerBadgeText}>{unread > 9 ? '9+' : String(unread)}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          ),
+        }}
+      />
       <ScrollView ref={scrollRef} style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.welcome}>Welcome back{originalName ? `, ${originalName}` : ''}</Text>
         <Text style={styles.email}>{session?.user.email}</Text>
+
+        <View style={styles.themeRow}>
+          <Text style={styles.themeLabel}>Dark Mode</Text>
+          <Switch
+            value={theme === 'dark'}
+            onValueChange={toggleTheme}
+            trackColor={{ false: 'rgba(127,127,127,0.45)', true: colors.accent }}
+            thumbColor="#fff"
+            ios_backgroundColor="rgba(127,127,127,0.45)"
+          />
+        </View>
 
         {setupRequired ? (
           <View style={styles.notice}>
@@ -281,9 +315,7 @@ export default function ProfileScreen() {
               <Text style={styles.checkBtnText}>CHECK</Text>
             </Pressable>
           </View>
-          <Text style={styles.hint}>
-            Tip: use your local nickname so other players recognize you. Changes are limited to once every 90 days.
-          </Text>
+          <Text style={styles.hint}>Changes are limited to once every 90 days.</Text>
           {nameLocked ? (
             <Text style={styles.lockMsg}>
               Display name is locked until {nameLockedUntil!.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}.
@@ -315,7 +347,6 @@ export default function ProfileScreen() {
               <Chip key={c.value} label={c.label} active={city === c.value} onPress={() => setCity(c.value)} />
             ))}
           </View>
-          <Text style={styles.hint}>Used to pre-fill the binder search filters.</Text>
         </Field>
 
         {availableBoroughs.length > 0 ? (
@@ -386,6 +417,8 @@ export default function ProfileScreen() {
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label.toUpperCase()}</Text>
@@ -403,6 +436,8 @@ function SubwayDropdown({
   selected: string[];
   onToggle: (s: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [open, setOpen] = useState(false);
   const label =
     selected.length === 0 ? 'Any' : selected.length === 1 ? selected[0] : `${selected.length} selected`;
@@ -428,6 +463,8 @@ function SubwayDropdown({
 }
 
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <Pressable
       onPress={onPress}
@@ -437,7 +474,9 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: Palette) => StyleSheet.create({
+  themeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, marginBottom: 2 },
+  themeLabel: { color: colors.textPrimary, fontFamily: fonts.serif, letterSpacing: 2, fontSize: 12, textTransform: 'uppercase' },
   flex: { flex: 1, backgroundColor: colors.bgPrimary },
   container: { flex: 1, backgroundColor: colors.bgPrimary },
   content: { padding: 20, gap: 4, paddingBottom: 60 },
@@ -529,7 +568,7 @@ const styles = StyleSheet.create({
   saveBtn: { marginTop: 20, padding: 14, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center' },
   saveBtnPressed: { backgroundColor: colors.accentLight },
   saveBtnDisabled: { opacity: 0.5 },
-  saveBtnText: { color: colors.bgPrimary, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
+  saveBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 14 },
 
   tradeTapBtn: {
     flexDirection: 'row',
@@ -542,7 +581,7 @@ const styles = StyleSheet.create({
   },
   tradeTapBtnPressed: { backgroundColor: colors.accentLight },
   tradeTapBtnText: {
-    color: colors.bgPrimary,
+    color: colors.onAccent,
     fontFamily: fonts.serifBold,
     fontSize: 14,
     letterSpacing: 3,
@@ -575,4 +614,18 @@ const styles = StyleSheet.create({
   },
   signOutPressed: { backgroundColor: colors.bgCard },
   signOutText: { color: colors.danger, fontFamily: fonts.serifBold, letterSpacing: 2 },
+
+  headerBadge: {
+    position: 'absolute',
+    top: -4,
+    right: 6,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerBadgeText: { color: '#fff', fontSize: 9, fontFamily: fonts.bodyBold },
 });

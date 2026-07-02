@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { clearPresence, fetchNearbyTradeBinders, pingPresence, type StartResult } from './presence';
@@ -221,19 +221,24 @@ export function AutoSearchProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const value: AutoSearchState = {
-    active,
-    since,
-    expiresAt,
-    eventCode,
-    lastLat,
-    lastLng,
-    nearbyCount,
-    start,
-    stop,
-    extend,
-    setEventCode,
-  };
+  // Memoized so consumers (e.g. the header jolly icon) don't re-render — and
+  // reload their image, which reads as a flicker — on unrelated provider renders.
+  const value = useMemo<AutoSearchState>(
+    () => ({
+      active,
+      since,
+      expiresAt,
+      eventCode,
+      lastLat,
+      lastLng,
+      nearbyCount,
+      start,
+      stop,
+      extend,
+      setEventCode,
+    }),
+    [active, since, expiresAt, eventCode, lastLat, lastLng, nearbyCount, start, stop, extend, setEventCode],
+  );
 
   return <AutoSearchContext.Provider value={value}>{children}</AutoSearchContext.Provider>;
 }
