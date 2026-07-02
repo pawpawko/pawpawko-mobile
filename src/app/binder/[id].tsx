@@ -18,10 +18,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import DraggableFlatList, {
-  ScaleDecorator,
-  type RenderItemParams,
-} from 'react-native-draggable-flatlist';
+import DraggableFlatList from 'react-native-draggable-flatlist';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   interpolate,
@@ -38,7 +35,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
 import { SyncStatusBar } from '@/components/sync-status';
+import { DraggableTile } from '@/features/binder/draggable-tile';
+import { EditToolbar } from '@/features/binder/edit-toolbar';
+import { Pagination } from '@/features/binder/pagination';
 import { applySortMode } from '@/features/binder/sort';
+import { SortPicker } from '@/features/binder/sort-picker';
 import { makeSharedStyles } from '@/features/binder/styles';
 import { type CardInfo, type Flair, type Listing } from '@/features/binder/types';
 import { useAuth } from '@/lib/auth';
@@ -855,121 +856,6 @@ export default function BinderDetailScreen() {
 
 // ---------------- subcomponents ----------------
 
-function EditToolbar({
-  aestheticsMode,
-  onToggleAesthetics,
-  onAddCards,
-  onOpenSettings,
-}: {
-  aestheticsMode: boolean;
-  onToggleAesthetics: () => void;
-  onAddCards: () => void;
-  onOpenSettings?: () => void; // owner-only; hidden for collaborators
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  return (
-    <View style={styles.toolbar}>
-      <Pressable
-        style={({ pressed }) => [
-          styles.toolbarIconBtn,
-          aestheticsMode && styles.toolbarBtnActive,
-          pressed && { opacity: 0.7 },
-        ]}
-        onPress={onToggleAesthetics}
-        accessibilityLabel={aestheticsMode ? 'Exit sort mode' : 'Sort mode'}>
-        <Ionicons
-          name="color-palette-outline"
-          size={18}
-          color={aestheticsMode ? colors.bgPrimary : colors.accent}
-        />
-      </Pressable>
-      {onOpenSettings ? (
-        <Pressable
-          onPress={onOpenSettings}
-          style={({ pressed }) => [styles.toolbarIconBtn, pressed && { opacity: 0.7 }]}
-          accessibilityLabel="Binder settings">
-          <Ionicons name="settings-outline" size={18} color={colors.accent} />
-        </Pressable>
-      ) : null}
-      <Pressable
-        style={({ pressed }) => [styles.toolbarBtnPrimary, pressed && { opacity: 0.7 }]}
-        onPress={onAddCards}
-        accessibilityLabel="Add cards">
-        <Ionicons name="add" size={22} color={colors.bgPrimary} />
-      </Pressable>
-    </View>
-  );
-}
-
-function SortPicker({
-  value,
-  options,
-  onChange,
-}: {
-  value: SortMode;
-  options: { value: SortMode; label: string }[];
-  onChange: (m: SortMode) => void;
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  return (
-    <View style={styles.sortPicker}>
-      <FlatList
-        horizontal
-        keyExtractor={(o) => o.value}
-        data={options}
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: 8, paddingHorizontal: 12 }}
-        renderItem={({ item }) => {
-          const active = item.value === value;
-          return (
-            <Pressable
-              onPress={() => onChange(item.value)}
-              style={[styles.sortChip, active && styles.sortChipActive]}>
-              <Text style={[styles.sortChipText, active && styles.sortChipTextActive]}>
-                {item.label}
-              </Text>
-            </Pressable>
-          );
-        }}
-      />
-    </View>
-  );
-}
-
-function Pagination({
-  page,
-  totalPages,
-  onChange,
-}: {
-  page: number;
-  totalPages: number;
-  onChange: (p: number) => void;
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  return (
-    <View style={styles.pagination}>
-      <Pressable
-        disabled={page <= 1}
-        onPress={() => onChange(page - 1)}
-        style={[styles.pageBtn, page <= 1 && styles.pageBtnDisabled]}>
-        <Ionicons name="chevron-back" size={16} color={colors.textPrimary} />
-      </Pressable>
-      <Text style={styles.pageLabel}>
-        Page {page} / {totalPages}
-      </Text>
-      <Pressable
-        disabled={page >= totalPages}
-        onPress={() => onChange(page + 1)}
-        style={[styles.pageBtn, page >= totalPages && styles.pageBtnDisabled]}>
-        <Ionicons name="chevron-forward" size={16} color={colors.textPrimary} />
-      </Pressable>
-    </View>
-  );
-}
-
 function BinderPager({
   listings,
   cards,
@@ -1123,47 +1009,6 @@ function BinderPager({
         );
       }}
     />
-  );
-}
-
-function DraggableTile({
-  item,
-  drag,
-  isActive,
-  cards,
-  numColumns,
-  isWishlist,
-}: RenderItemParams<Listing> & {
-  cards: Record<string, CardInfo>;
-  numColumns: number;
-  isWishlist: boolean;
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  const card = cards[item.card_code];
-  return (
-    <ScaleDecorator>
-      <View style={[styles.dragCell, isActive && { opacity: 0.7 }]}>
-        {card?.image_url ? (
-          <Image source={{ uri: card.image_url }} style={styles.dragImg} contentFit="contain" />
-        ) : (
-          <View style={[styles.dragImg, styles.placeholder]} />
-        )}
-        <View style={styles.dragInfo}>
-          <Text style={styles.cardCode}>{item.card_code}</Text>
-          {!isWishlist ? (
-            <Text style={styles.cardMeta}>×{item.quantity} · {item.listing_type}</Text>
-          ) : null}
-        </View>
-        <Pressable
-          onPressIn={drag}
-          disabled={isActive}
-          hitSlop={12}
-          accessibilityLabel="Drag to reorder">
-          <Ionicons name="reorder-three" size={26} color={colors.accent} />
-        </Pressable>
-      </View>
-    </ScaleDecorator>
   );
 }
 
@@ -2493,81 +2338,6 @@ const makeStyles = (colors: Palette) => ({
     enterEditBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
     doneBtnText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
 
-    toolbar: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 8,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-      backgroundColor: colors.bgSecondary,
-    },
-    toolbarIconBtn: {
-      paddingHorizontal: 8,
-      paddingVertical: 7,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.bgCard,
-    },
-    toolbarBtnActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-    toolbarBtnPrimary: {
-      paddingHorizontal: 9,
-      paddingVertical: 6,
-      borderRadius: radius.sm,
-      backgroundColor: colors.accent,
-      marginLeft: 'auto',
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-
-    sortPicker: {
-      paddingVertical: 8,
-      backgroundColor: colors.bgSecondary,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    sortChip: {
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      borderRadius: 999,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.bgCard,
-    },
-    sortChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-    sortChipText: {
-      color: colors.textSecondary,
-      fontFamily: fonts.body,
-      fontSize: 13,
-      lineHeight: 18,
-      letterSpacing: 1,
-      includeFontPadding: false,
-    },
-    sortChipTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
-
-    pagination: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 12,
-      paddingVertical: 12,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
-      backgroundColor: colors.bgSecondary,
-    },
-    pageBtn: {
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.bgCard,
-    },
-    pageBtnDisabled: { opacity: 0.4 },
-    pageLabel: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13 },
-
     binderPage: { flex: 1, padding: 6, justifyContent: 'flex-start', alignItems: 'center' },
     binderPageGrid: {
       flexDirection: 'row',
@@ -2577,19 +2347,6 @@ const makeStyles = (colors: Palette) => ({
     },
     binderPageCell: { padding: 3, alignItems: 'center' },
     emptySlot: { opacity: 0.25 },
-
-    dragCell: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderBottomWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.bgPrimary,
-    },
-    dragImg: { width: 60, aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
-    dragInfo: { flex: 1 },
 
     modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' },
     closeBtn: { position: 'absolute', top: 40, right: 16, zIndex: 10, padding: 8 },
