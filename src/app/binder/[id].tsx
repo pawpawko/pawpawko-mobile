@@ -437,6 +437,9 @@ export default function BinderDetailScreen() {
   }
 
   async function saveLayout(next: Layout) {
+    // Layout is an owner-only binder setting — RLS blocks the write for
+    // collaborators, so bail before touching local view state or the DB.
+    if (!isOwner) return;
     setLayout(next);
     // Keep sort mode in sync if currently on a custom layout
     if (sortMode === 'custom-3x3' || sortMode === 'custom-4x3') {
