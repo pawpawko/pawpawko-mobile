@@ -1,5 +1,6 @@
 import { Cinzel_500Medium, Cinzel_700Bold, useFonts as useCinzel } from '@expo-google-fonts/cinzel';
 import { Lora_400Regular, Lora_400Regular_Italic, Lora_700Bold, useFonts as useLora } from '@expo-google-fonts/lora';
+import * as Sentry from '@sentry/react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
@@ -13,6 +14,15 @@ import { NotificationsProvider } from '@/lib/notifications-context';
 import { SyncProvider } from '@/lib/sync-queue';
 import { colors } from '@/lib/theme';
 import { ThemeProvider, useTheme } from '@/lib/theme-context';
+
+// Errors only, real builds only — Metro dev sessions already surface errors
+// in the red box, and this keeps the free-tier quota for signal. Native crash
+// reporting starts with the first EAS build that includes this SDK; older
+// clients degrade to JS-only reporting with a console warning.
+Sentry.init({
+  dsn: 'https://bf1431431d3c0a05f3c29a1134629cbb@o4511666502500352.ingest.us.sentry.io/4511666520391680',
+  enabled: !__DEV__,
+});
 
 function AuthGate() {
   const { session, loading, needsSetup } = useAuth();
@@ -136,7 +146,7 @@ function AuthGate() {
   );
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const [cinzelLoaded] = useCinzel({ Cinzel_500Medium, Cinzel_700Bold });
   const [loraLoaded] = useLora({ Lora_400Regular, Lora_400Regular_Italic, Lora_700Bold });
 
@@ -164,3 +174,5 @@ export default function RootLayout() {
     </ThemeProvider>
   );
 }
+
+export default Sentry.wrap(RootLayout);
