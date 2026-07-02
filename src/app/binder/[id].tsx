@@ -18,7 +18,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
+import DraggableFlatList, {
+  ScaleDecorator,
+  type RenderItemParams,
+} from 'react-native-draggable-flatlist';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   interpolate,
@@ -35,10 +38,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
 import { SyncStatusBar } from '@/components/sync-status';
+import { applySortMode } from '@/features/binder/sort';
+import { makeSharedStyles } from '@/features/binder/styles';
+import { type CardInfo, type Flair, type Listing } from '@/features/binder/types';
 import { useAuth } from '@/lib/auth';
 import { addCardToWishlist, type WishlistResult } from '@/lib/wishlist';
 import {
-  COLOR_ORDER,
   CYBERPUNK_COLORS,
   CYBERPUNK_COSTS,
   CYBERPUNK_RAM,
@@ -71,7 +76,6 @@ import { enqueue, newId, pendingForBinder } from '@/lib/sync-queue';
 import { fonts, radius, type Palette } from '@/lib/theme';
 import { useTheme } from '@/lib/theme-context';
 
-type Flair = 'trade' | 'wishlist';
 const FLAIR_OPTIONS: { value: Flair; label: string }[] = [
   { value: 'trade', label: 'Trade' },
   { value: 'wishlist', label: 'Wishlist' },
@@ -85,32 +89,6 @@ type BinderHeader = {
   category: string;
   flair: string;
   layout?: Layout | null;
-};
-
-type Listing = {
-  id: string;
-  card_code: string;
-  quantity: number;
-  listing_type: string;
-  sort_order: number | null;
-  deck_id?: string | null; // set on deck-synced wishlist rows (owner read only)
-};
-
-type CardInfo = {
-  card_code: string;
-  name: string | null;
-  image_url: string | null;
-  image_url_lg: string | null;
-  // Sort-mode columns (optional — only fetched when present).
-  color?: string | null;
-  cost?: number | null;
-  types?: string[] | null;
-  supertype?: string | null;
-  hp?: number | null;
-  ram?: number | null; // Cyberpunk deck-building stat
-  type?: string | null; // Cyberpunk Legend/Unit/Gear/Program
-  rarity?: string | null;
-  release_order?: number | null;
 };
 
 // Snapshot persisted to the offline cache for own binders.
@@ -873,88 +851,6 @@ export default function BinderDetailScreen() {
       />
     </>
   );
-}
-
-// ---------------- sort + helpers ----------------
-
-function applySortMode(
-  listings: Listing[],
-  cards: Record<string, CardInfo>,
-  mode: SortMode,
-): Listing[] {
-  const cardOf = (l: Listing) => cards[l.card_code] || ({} as CardInfo);
-  const out = listings.slice();
-  if (mode === 'custom-3x3' || mode === 'custom-4x3') {
-    // Nulls (new listings without a position) sort to the end, matching the
-    // web app's `order(sort_order, nullsFirst: false)`. Among nulls the input
-    // order is preserved (stable sort) so freshly-added cards stay together at
-    // the end in insertion order — NOT regrouped by card_code, which for One
-    // Piece's color-grouped numbering would look like an unwanted color sort.
-    return out.sort((a, b) => (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity));
-  }
-  if (mode === 'release') {
-    return out.sort(
-      (a, b) =>
-        (cardOf(b).release_order ?? 0) - (cardOf(a).release_order ?? 0) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  if (mode === 'color') {
-    const rank = (l: Listing) => {
-      const i = COLOR_ORDER.indexOf(cardOf(l).color ?? '');
-      return i < 0 ? 99 : i;
-    };
-    return out.sort(
-      (a, b) =>
-        rank(a) - rank(b) ||
-        (cardOf(a).cost ?? 0) - (cardOf(b).cost ?? 0) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  if (mode === 'cost') {
-    return out.sort(
-      (a, b) =>
-        (cardOf(a).cost ?? 99) - (cardOf(b).cost ?? 99) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  if (mode === 'ram') {
-    return out.sort(
-      (a, b) =>
-        (cardOf(a).ram ?? 99) - (cardOf(b).ram ?? 99) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  if (mode === 'ptype') {
-    const rank = (l: Listing) => {
-      const t = (cardOf(l).types || [])[0];
-      const i = POKEMON_TYPES.indexOf(t ?? '');
-      return i < 0 ? 99 : i;
-    };
-    return out.sort(
-      (a, b) =>
-        rank(a) - rank(b) ||
-        (cardOf(b).hp ?? 0) - (cardOf(a).hp ?? 0) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  if (mode === 'hp') {
-    return out.sort(
-      (a, b) =>
-        (cardOf(b).hp ?? -1) - (cardOf(a).hp ?? -1) ||
-        String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  if (mode === 'supertype') {
-    const rank = (l: Listing) => {
-      const i = POKEMON_SUPERTYPES.indexOf(cardOf(l).supertype ?? '');
-      return i < 0 ? 99 : i;
-    };
-    return out.sort(
-      (a, b) => rank(a) - rank(b) || String(a.card_code).localeCompare(b.card_code),
-    );
-  }
-  return out;
 }
 
 // ---------------- subcomponents ----------------
@@ -2528,594 +2424,511 @@ function CardPagerModal({
   );
 }
 
-const makeStyles = (colors: Palette) => StyleSheet.create({
-  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary },
-  grid: { padding: 8 },
+const makeStyles = (colors: Palette) => ({
+  ...makeSharedStyles(colors),
+  ...StyleSheet.create({
+    loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgPrimary },
+    grid: { padding: 8 },
 
-  // "For deck" filter bar (owner wishlist) + deck-origin pills
-  deckFilterBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  deckFilterLabel: {
-    color: colors.textMuted,
-    fontFamily: fonts.body,
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  deckFilterPills: { gap: 6, paddingRight: 12 },
-  dfPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-  },
-  dfPillActive: { backgroundColor: '#4d9de0', borderColor: '#4d9de0' },
-  dfPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
-  dfPillTextActive: { color: '#0c0a12', fontFamily: fonts.bodyBold },
-  deckTileBadge: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    backgroundColor: 'rgba(77,157,224,0.92)',
-    borderRadius: 999,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  deckTileBadgeText: { fontSize: 10 },
-  deckOriginPill: {
-    alignSelf: 'center',
-    marginTop: 8,
-    backgroundColor: 'rgba(77,157,224,0.18)',
-    borderColor: '#4d9de0',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
-  deckOriginPillText: { color: '#9cc7ee', fontFamily: fonts.bodyBold, fontSize: 12 },
-  header: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
-  title: { fontSize: 22, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
-  titleOwner: { fontSize: 18, color: colors.textSecondary, fontFamily: fonts.body },
-  sub: { color: colors.textMuted, marginTop: 4, fontFamily: fonts.body, letterSpacing: 1 },
-  headerPills: { flexDirection: 'row', gap: 6, marginTop: 8 },
-  cell: { padding: 4, alignItems: 'center' },
-  cellPressed: { opacity: 0.7 },
-  cardImg: { width: '100%', aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
-  placeholder: { borderWidth: 1, borderColor: colors.border },
-  cardCode: { fontSize: 11, marginTop: 4, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
-  cardMeta: { fontSize: 10, color: colors.textMuted, fontFamily: fonts.body },
-  empty: { textAlign: 'center', marginTop: 48, color: colors.textMuted, fontFamily: fonts.body },
+    // "For deck" filter bar (owner wishlist) + deck-origin pills
+    deckFilterBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
+    deckFilterLabel: {
+      color: colors.textMuted,
+      fontFamily: fonts.body,
+      fontSize: 11,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+    },
+    deckFilterPills: { gap: 6, paddingRight: 12 },
+    dfPill: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgCard,
+    },
+    dfPillActive: { backgroundColor: '#4d9de0', borderColor: '#4d9de0' },
+    dfPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
+    dfPillTextActive: { color: '#0c0a12', fontFamily: fonts.bodyBold },
+    deckTileBadge: {
+      position: 'absolute',
+      top: 2,
+      right: 2,
+      backgroundColor: 'rgba(77,157,224,0.92)',
+      borderRadius: 999,
+      paddingHorizontal: 4,
+      paddingVertical: 1,
+    },
+    deckTileBadgeText: { fontSize: 10 },
+    deckOriginPill: {
+      alignSelf: 'center',
+      marginTop: 8,
+      backgroundColor: 'rgba(77,157,224,0.18)',
+      borderColor: '#4d9de0',
+      borderWidth: 1,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+    },
+    deckOriginPillText: { color: '#9cc7ee', fontFamily: fonts.bodyBold, fontSize: 12 },
+    header: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
+    title: { fontSize: 22, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
+    titleOwner: { fontSize: 18, color: colors.textSecondary, fontFamily: fonts.body },
+    sub: { color: colors.textMuted, marginTop: 4, fontFamily: fonts.body, letterSpacing: 1 },
+    headerPills: { flexDirection: 'row', gap: 6, marginTop: 8 },
 
-  enterEditBtn: {
-    alignSelf: 'flex-end',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginRight: 12,
-    marginBottom: 4,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accent,
-  },
-  enterEditBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
-  doneBtnText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
+    enterEditBtn: {
+      alignSelf: 'flex-end',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      marginRight: 12,
+      marginBottom: 4,
+      borderRadius: radius.sm,
+      backgroundColor: colors.accent,
+    },
+    enterEditBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
+    doneBtnText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
 
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.bgSecondary,
-  },
-  toolbarIconBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-  },
-  toolbarBtnActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  toolbarBtnPrimary: {
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accent,
-    marginLeft: 'auto',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+    toolbar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      backgroundColor: colors.bgSecondary,
+    },
+    toolbarIconBtn: {
+      paddingHorizontal: 8,
+      paddingVertical: 7,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgCard,
+    },
+    toolbarBtnActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+    toolbarBtnPrimary: {
+      paddingHorizontal: 9,
+      paddingVertical: 6,
+      borderRadius: radius.sm,
+      backgroundColor: colors.accent,
+      marginLeft: 'auto',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
 
-  sortPicker: {
-    paddingVertical: 8,
-    backgroundColor: colors.bgSecondary,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  sortChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-  },
-  sortChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  sortChipText: {
-    color: colors.textSecondary,
-    fontFamily: fonts.body,
-    fontSize: 13,
-    lineHeight: 18,
-    letterSpacing: 1,
-    includeFontPadding: false,
-  },
-  sortChipTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
+    sortPicker: {
+      paddingVertical: 8,
+      backgroundColor: colors.bgSecondary,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    sortChip: {
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgCard,
+    },
+    sortChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+    sortChipText: {
+      color: colors.textSecondary,
+      fontFamily: fonts.body,
+      fontSize: 13,
+      lineHeight: 18,
+      letterSpacing: 1,
+      includeFontPadding: false,
+    },
+    sortChipTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
 
-  pagination: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    backgroundColor: colors.bgSecondary,
-  },
-  pageBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-  },
-  pageBtnDisabled: { opacity: 0.4 },
-  pageLabel: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13 },
+    pagination: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+      paddingVertical: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      backgroundColor: colors.bgSecondary,
+    },
+    pageBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgCard,
+    },
+    pageBtnDisabled: { opacity: 0.4 },
+    pageLabel: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 13 },
 
-  binderPage: { flex: 1, padding: 6, justifyContent: 'flex-start', alignItems: 'center' },
-  binderPageGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'flex-start',
-    alignItems: 'flex-start',
-  },
-  binderPageCell: { padding: 3, alignItems: 'center' },
-  emptySlot: { opacity: 0.25 },
+    binderPage: { flex: 1, padding: 6, justifyContent: 'flex-start', alignItems: 'center' },
+    binderPageGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start',
+    },
+    binderPageCell: { padding: 3, alignItems: 'center' },
+    emptySlot: { opacity: 0.25 },
 
-  dragCell: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgPrimary,
-  },
-  dragImg: { width: 60, aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
-  dragInfo: { flex: 1 },
+    dragCell: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgPrimary,
+    },
+    dragImg: { width: 60, aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
+    dragInfo: { flex: 1 },
 
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' },
-  closeBtn: { position: 'absolute', top: 40, right: 16, zIndex: 10, padding: 8 },
-  modalPagerList: { flex: 1 },
-  pagerPage: { flex: 1, padding: 24, justifyContent: 'center', alignItems: 'center', gap: 8 },
-  modalImg: { width: '90%', aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
-  modalCardName: {
-    fontSize: 18,
-    fontFamily: fonts.serifBold,
-    color: colors.textPrimary,
-    letterSpacing: 1,
-    textAlign: 'center',
-    marginTop: 12,
-  },
-  modalCode: { fontSize: 13, color: colors.accent, fontFamily: fonts.body, letterSpacing: 2 },
-  gotItBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#e0b24d',
-    borderRadius: 999,
-    paddingHorizontal: 22,
-    paddingVertical: 10,
-    marginTop: 18,
-  },
-  gotItText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
-  modalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignSelf: 'stretch',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderColor: colors.border,
-    marginTop: 4,
-  },
-  modalLabel: { color: colors.textMuted, fontFamily: fonts.serif, letterSpacing: 2, fontSize: 11 },
-  modalValue: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
-  shareBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 24 },
-  shareCard: {
-    backgroundColor: colors.bgSecondary,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderAccent,
-    padding: 24,
-    alignItems: 'center',
-    gap: 14,
-  },
-  shareCloseBtn: { position: 'absolute', top: 8, right: 8, padding: 8, zIndex: 1 },
-  shareTitle: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 3, fontSize: 14 },
-  qrWrap: { padding: 16, backgroundColor: colors.textPrimary, borderRadius: radius.sm },
-  shareUrl: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, textAlign: 'center' },
-  shareBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accent,
-    alignSelf: 'stretch',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  shareBtnPressed: { backgroundColor: colors.accentLight },
-  shareBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 13 },
+    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' },
+    closeBtn: { position: 'absolute', top: 40, right: 16, zIndex: 10, padding: 8 },
+    modalPagerList: { flex: 1 },
+    pagerPage: { flex: 1, padding: 24, justifyContent: 'center', alignItems: 'center', gap: 8 },
+    modalImg: { width: '90%', aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
+    modalCardName: {
+      fontSize: 18,
+      fontFamily: fonts.serifBold,
+      color: colors.textPrimary,
+      letterSpacing: 1,
+      textAlign: 'center',
+      marginTop: 12,
+    },
+    modalCode: { fontSize: 13, color: colors.accent, fontFamily: fonts.body, letterSpacing: 2 },
+    gotItBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      backgroundColor: '#e0b24d',
+      borderRadius: 999,
+      paddingHorizontal: 22,
+      paddingVertical: 10,
+      marginTop: 18,
+    },
+    gotItText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
+    modalRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignSelf: 'stretch',
+      paddingVertical: 8,
+      paddingHorizontal: 8,
+      borderTopWidth: 1,
+      borderColor: colors.border,
+      marginTop: 4,
+    },
+    modalLabel: { color: colors.textMuted, fontFamily: fonts.serif, letterSpacing: 2, fontSize: 11 },
+    modalValue: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+    shareCard: {
+      backgroundColor: colors.bgSecondary,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.borderAccent,
+      padding: 24,
+      alignItems: 'center',
+      gap: 14,
+    },
+    qrWrap: { padding: 16, backgroundColor: colors.textPrimary, borderRadius: radius.sm },
+    shareUrl: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, textAlign: 'center' },
 
-  pagerCount: {
-    position: 'absolute',
-    bottom: 24,
-    alignSelf: 'center',
-    color: colors.textMuted,
-    fontFamily: fonts.serif,
-    letterSpacing: 3,
-    fontSize: 13,
-  },
+    pagerCount: {
+      position: 'absolute',
+      bottom: 24,
+      alignSelf: 'center',
+      color: colors.textMuted,
+      fontFamily: fonts.serif,
+      letterSpacing: 3,
+      fontSize: 13,
+    },
+    manageBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingVertical: 12,
+      marginTop: 4,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.borderAccent,
+    },
+    manageBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 12 },
 
-  editCard: {
-    backgroundColor: colors.bgSecondary,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderAccent,
-    padding: 24,
-    gap: 10,
-  },
-  editLabel: {
-    color: colors.textMuted,
-    fontFamily: fonts.serif,
-    letterSpacing: 2,
-    fontSize: 11,
-    marginTop: 8,
-  },
-  editInput: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-    borderRadius: radius.sm,
-    padding: 12,
-    fontSize: 16,
-    color: colors.textPrimary,
-    fontFamily: fonts.body,
-  },
-  editPillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  editPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-  },
-  editPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  editPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 13, letterSpacing: 1 },
-  editPillTextActive: { color: colors.onAccent, fontFamily: fonts.serifBold },
-  editSaveDisabled: { opacity: 0.4 },
-  manageBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    marginTop: 4,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderAccent,
-  },
-  manageBtnText: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 2, fontSize: 12 },
-  deleteBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    marginTop: 4,
-  },
-  deleteBtnText: {
-    color: colors.danger,
-    fontFamily: fonts.serifBold,
-    letterSpacing: 2,
-    fontSize: 12,
-  },
+    // Partner management (shared binders)
+    partnerSection: { marginTop: 8, marginBottom: 4 },
+    partnerChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 999,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      marginTop: 4,
+    },
+    partnerChipName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
+    partnerInviteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+    partnerInput: { flex: 1, marginBottom: 0 },
+    partnerInviteBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: radius.lg,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    partnerInviteBtnText: { color: colors.onAccent, fontFamily: fonts.bodyBold, fontSize: 13 },
+    partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
 
-  // Partner management (shared binders)
-  partnerSection: { marginTop: 8, marginBottom: 4 },
-  partnerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    marginTop: 4,
-  },
-  partnerChipName: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
-  partnerInviteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  partnerInput: { flex: 1, marginBottom: 0 },
-  partnerInviteBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.lg,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  partnerInviteBtnText: { color: colors.onAccent, fontFamily: fonts.bodyBold, fontSize: 13 },
-  partnerMsg: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12, marginTop: 6 },
+    sheetImg: { width: 140, aspectRatio: 0.72, alignSelf: 'center', borderRadius: radius.sm },
 
-  sheetImg: { width: 140, aspectRatio: 0.72, alignSelf: 'center', borderRadius: radius.sm },
+    pagerWrap: { flex: 1, backgroundColor: colors.bgPrimary, paddingTop: 48 },
+    pagerHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    pagerImageRow: { flex: 1, paddingTop: 12 },
+    pagerList: { flex: 1 },
+    pagerCardPage: { alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 16 },
+    pagerCardImg: {
+      width: '85%',
+      aspectRatio: 0.72,
+      borderRadius: radius.sm,
+      backgroundColor: colors.bgCard,
+    },
+    pagerForm: { paddingHorizontal: 16, paddingTop: 12, gap: 8 },
+    removeAllSlot: { height: 44, justifyContent: 'center' },
+    pagerCountInline: {
+      textAlign: 'center',
+      color: colors.textMuted,
+      fontFamily: fonts.serif,
+      letterSpacing: 3,
+      fontSize: 12,
+      marginTop: 6,
+    },
+    savedFlash: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 6,
+    },
+    savedFlashText: {
+      color: colors.accent,
+      fontFamily: fonts.serifBold,
+      letterSpacing: 2,
+      fontSize: 11,
+      includeFontPadding: false,
+    },
 
-  pagerWrap: { flex: 1, backgroundColor: colors.bgPrimary, paddingTop: 48 },
-  pagerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  pagerImageRow: { flex: 1, paddingTop: 12 },
-  pagerList: { flex: 1 },
-  pagerCardPage: { alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 16 },
-  pagerCardImg: {
-    width: '85%',
-    aspectRatio: 0.72,
-    borderRadius: radius.sm,
-    backgroundColor: colors.bgCard,
-  },
-  pagerForm: { paddingHorizontal: 16, paddingTop: 12, gap: 8 },
-  removeAllSlot: { height: 44, justifyContent: 'center' },
-  pagerCountInline: {
-    textAlign: 'center',
-    color: colors.textMuted,
-    fontFamily: fonts.serif,
-    letterSpacing: 3,
-    fontSize: 12,
-    marginTop: 6,
-  },
-  savedFlash: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 6,
-  },
-  savedFlashText: {
-    color: colors.accent,
-    fontFamily: fonts.serifBold,
-    letterSpacing: 2,
-    fontSize: 11,
-    includeFontPadding: false,
-  },
+    browserWrap: { flex: 1, backgroundColor: colors.bgPrimary, paddingTop: 48 },
+    browserHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 8,
+    },
+    browserTitle: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 3, fontSize: 14 },
+    browserInput: {
+      marginHorizontal: 16,
+      marginBottom: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgCard,
+      borderRadius: radius.sm,
+      padding: 12,
+      fontSize: 15,
+      color: colors.textPrimary,
+      fontFamily: fonts.body,
+    },
 
-  sheetCardName: {
-    color: colors.textPrimary,
-    fontFamily: fonts.serifBold,
-    letterSpacing: 1,
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  sheetCode: { color: colors.accent, fontFamily: fonts.body, letterSpacing: 2, fontSize: 12, textAlign: 'center' },
+    browserFilterToggle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingVertical: 10,
+      borderTopWidth: 1,
+      borderBottomWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgSecondary,
+    },
+    browserFilterToggleText: {
+      color: colors.accent,
+      fontFamily: fonts.serif,
+      letterSpacing: 2,
+      fontSize: 12,
+      includeFontPadding: false,
+    },
+    browserFiltersWrap: { flex: 1, backgroundColor: colors.bgSecondary },
+    browserFilters: { padding: 16, gap: 8 },
+    browserFilterLabel: {
+      color: colors.textMuted,
+      fontFamily: fonts.serif,
+      letterSpacing: 2,
+      fontSize: 11,
+      marginTop: 8,
+    },
+    filterDropdown: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.bgCard,
+      borderRadius: radius.sm,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      marginTop: 4,
+      gap: 4,
+    },
+    filterDropdownLabel: {
+      color: colors.textMuted,
+      fontFamily: fonts.serif,
+      letterSpacing: 2,
+      fontSize: 10,
+      includeFontPadding: false,
+    },
+    filterDropdownValueRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    filterDropdownValue: {
+      flex: 1,
+      color: colors.textPrimary,
+      fontFamily: fonts.body,
+      fontSize: 14,
+      lineHeight: 20,
+      includeFontPadding: false,
+    },
+    filterDropdownValueEmpty: { color: colors.textMuted },
 
-  browserWrap: { flex: 1, backgroundColor: colors.bgPrimary, paddingTop: 48 },
-  browserHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  browserTitle: { color: colors.accent, fontFamily: fonts.serifBold, letterSpacing: 3, fontSize: 14 },
-  browserInput: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-    borderRadius: radius.sm,
-    padding: 12,
-    fontSize: 15,
-    color: colors.textPrimary,
-    fontFamily: fonts.body,
-  },
+    filterSheetCard: {
+      backgroundColor: colors.bgSecondary,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.borderAccent,
+      paddingVertical: 12,
+      maxHeight: '70%',
+    },
+    filterSheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 20,
+      paddingBottom: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    filterOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    filterOptionActive: { backgroundColor: colors.bgCardHover },
+    filterOptionText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15 },
+    filterOptionTextActive: { color: colors.accent, fontFamily: fonts.serifBold },
+    browserFilterButtons: { flexDirection: 'row', gap: 8, marginTop: 16 },
+    applyBtn: {
+      flex: 1,
+      padding: 12,
+      borderRadius: radius.sm,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+    },
+    applyBtnText: {
+      color: colors.onAccent,
+      fontFamily: fonts.serifBold,
+      letterSpacing: 2,
+      fontSize: 13,
+    },
+    clearBtn: {
+      flex: 1,
+      padding: 12,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.borderAccent,
+      alignItems: 'center',
+    },
+    clearBtnText: {
+      color: colors.accent,
+      fontFamily: fonts.serifBold,
+      letterSpacing: 2,
+      fontSize: 13,
+    },
 
-  browserFilterToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgSecondary,
-  },
-  browserFilterToggleText: {
-    color: colors.accent,
-    fontFamily: fonts.serif,
-    letterSpacing: 2,
-    fontSize: 12,
-    includeFontPadding: false,
-  },
-  browserFiltersWrap: { flex: 1, backgroundColor: colors.bgSecondary },
-  browserFilters: { padding: 16, gap: 8 },
-  browserFilterLabel: {
-    color: colors.textMuted,
-    fontFamily: fonts.serif,
-    letterSpacing: 2,
-    fontSize: 11,
-    marginTop: 8,
-  },
-  filterDropdown: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginTop: 4,
-    gap: 4,
-  },
-  filterDropdownLabel: {
-    color: colors.textMuted,
-    fontFamily: fonts.serif,
-    letterSpacing: 2,
-    fontSize: 10,
-    includeFontPadding: false,
-  },
-  filterDropdownValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  filterDropdownValue: {
-    flex: 1,
-    color: colors.textPrimary,
-    fontFamily: fonts.body,
-    fontSize: 14,
-    lineHeight: 20,
-    includeFontPadding: false,
-  },
-  filterDropdownValueEmpty: { color: colors.textMuted },
-
-  filterSheetCard: {
-    backgroundColor: colors.bgSecondary,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.borderAccent,
-    paddingVertical: 12,
-    maxHeight: '70%',
-  },
-  filterSheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  filterOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  filterOptionActive: { backgroundColor: colors.bgCardHover },
-  filterOptionText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15 },
-  filterOptionTextActive: { color: colors.accent, fontFamily: fonts.serifBold },
-  browserFilterButtons: { flexDirection: 'row', gap: 8, marginTop: 16 },
-  applyBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-  },
-  applyBtnText: {
-    color: colors.onAccent,
-    fontFamily: fonts.serifBold,
-    letterSpacing: 2,
-    fontSize: 13,
-  },
-  clearBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderAccent,
-    alignItems: 'center',
-  },
-  clearBtnText: {
-    color: colors.accent,
-    fontFamily: fonts.serifBold,
-    letterSpacing: 2,
-    fontSize: 13,
-  },
-
-  deckWishOverlayWrap: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deckWishOverlay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: radius.sm,
-    borderWidth: 2,
-    borderColor: colors.accent,
-    backgroundColor: 'rgba(0,0,0,0.78)',
-  },
-  deckWishOverlayText: {
-    color: colors.accent,
-    fontFamily: fonts.serifBold,
-    fontSize: 14,
-    letterSpacing: 3,
-    includeFontPadding: false,
-  },
-  wishToastWrap: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 5,
-  },
-  wishToastPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: radius.sm,
-    borderWidth: 2,
-    borderColor: colors.accent,
-    backgroundColor: 'rgba(0,0,0,0.78)',
-  },
-  wishToastText: {
-    color: colors.accent,
-    fontFamily: fonts.serifBold,
-    fontSize: 13,
-    letterSpacing: 2,
-    includeFontPadding: false,
-  },
+    deckWishOverlayWrap: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    deckWishOverlay: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: radius.sm,
+      borderWidth: 2,
+      borderColor: colors.accent,
+      backgroundColor: 'rgba(0,0,0,0.78)',
+    },
+    deckWishOverlayText: {
+      color: colors.accent,
+      fontFamily: fonts.serifBold,
+      fontSize: 14,
+      letterSpacing: 3,
+      includeFontPadding: false,
+    },
+    wishToastWrap: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 5,
+    },
+    wishToastPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 18,
+      paddingVertical: 12,
+      borderRadius: radius.sm,
+      borderWidth: 2,
+      borderColor: colors.accent,
+      backgroundColor: 'rgba(0,0,0,0.78)',
+    },
+    wishToastText: {
+      color: colors.accent,
+      fontFamily: fonts.serifBold,
+      fontSize: 13,
+      letterSpacing: 2,
+      includeFontPadding: false,
+    },
+  }),
 });
