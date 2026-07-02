@@ -35,8 +35,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DiceLoader } from '@/components/dice-loader';
 import { FlairPill } from '@/components/flair-pill';
 import { SyncStatusBar } from '@/components/sync-status';
+import { BinderPager } from '@/features/binder/binder-pager';
+import { CardPagerModal } from '@/features/binder/card-pager-modal';
 import { DraggableTile } from '@/features/binder/draggable-tile';
 import { EditToolbar } from '@/features/binder/edit-toolbar';
+import { FilterPickerSheet } from '@/features/binder/filter-picker-sheet';
 import { Pagination } from '@/features/binder/pagination';
 import { applySortMode } from '@/features/binder/sort';
 import { SortPicker } from '@/features/binder/sort-picker';
@@ -854,164 +857,6 @@ export default function BinderDetailScreen() {
   );
 }
 
-// ---------------- subcomponents ----------------
-
-function BinderPager({
-  listings,
-  cards,
-  decksById,
-  numColumns,
-  pageSize,
-  currentPage,
-  onPageChange,
-  onCardPress,
-  isWishlist,
-}: {
-  listings: Listing[];
-  cards: Record<string, CardInfo>;
-  decksById: Record<string, { id: string; name: string | null }>;
-  numColumns: number;
-  pageSize: number;
-  currentPage: number;
-  onPageChange: (p: number) => void;
-  onCardPress: (absoluteIdx: number) => void;
-  isWishlist: boolean;
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
-  const [pageHeight, setPageHeight] = useState(0);
-  const listRef = useRef<FlatList<Listing[]>>(null);
-
-  // Build pages: chunk listings into pageSize-sized arrays, pad the last
-  // page with nulls so every page renders a full pageSize grid.
-  const pages: (Listing | null)[][] = [];
-  for (let i = 0; i < listings.length; i += pageSize) {
-    const chunk: (Listing | null)[] = listings.slice(i, i + pageSize);
-    while (chunk.length < pageSize) chunk.push(null);
-    pages.push(chunk);
-  }
-  if (pages.length === 0) pages.push(new Array(pageSize).fill(null));
-
-  // Sync scroll position when currentPage is bumped externally (chevrons).
-  useEffect(() => {
-    if (listRef.current && pages.length > 0) {
-      listRef.current.scrollToIndex({ index: currentPage - 1, animated: true });
-    }
-  }, [currentPage, pages.length]);
-
-  // Both supported layouts are 3 rows; only the column count varies.
-  const numRows = 3;
-  const CARD_ASPECT = 0.72;
-  const PAGE_PAD = 6;
-  const CELL_PAD = 3;
-  const LABEL_H = 26; // code + meta text under each card
-
-  // Pick the card size that fills whichever dimension is tighter — width
-  // (cells side-by-side) or height (rows stacked). Fall back to a sane
-  // estimate before onLayout fires. Floor the result so every cell width
-  // is an integer; otherwise sub-pixel rounding can push the Nth cell
-  // onto the next row (showing 4-4-3-1 instead of 4-4-4).
-  const availW = pageWidth - PAGE_PAD * 2;
-  const availH = (pageHeight || 0) - PAGE_PAD * 2;
-  const cellMaxW = availW / numColumns - CELL_PAD * 2;
-  const cellMaxH = availH > 0 ? availH / numRows - CELL_PAD * 2 - LABEL_H : Infinity;
-  const cardW = Math.floor(Math.max(40, Math.min(cellMaxW, cellMaxH * CARD_ASPECT)));
-  const cardH = Math.floor(cardW / CARD_ASPECT);
-  const gridWidth = numColumns * (cardW + CELL_PAD * 2);
-
-  return (
-    <FlatList
-      ref={listRef as React.RefObject<FlatList<(Listing | null)[]>> as unknown as React.RefObject<FlatList<Listing[]>>}
-      data={pages as unknown as Listing[][]}
-      keyExtractor={(_, i) => `page-${i}`}
-      horizontal
-      pagingEnabled
-      showsHorizontalScrollIndicator={false}
-      onLayout={(e) => {
-        setPageWidth(e.nativeEvent.layout.width);
-        setPageHeight(e.nativeEvent.layout.height);
-      }}
-      getItemLayout={(_, i) => ({ length: pageWidth, offset: pageWidth * i, index: i })}
-      onMomentumScrollEnd={(e) => {
-        const idx = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
-        if (idx + 1 !== currentPage) onPageChange(idx + 1);
-      }}
-      renderItem={({ item: page, index: pageIndex }) => {
-        const cellWidth = cardW + CELL_PAD * 2;
-        return (
-          <View style={[styles.binderPage, { width: pageWidth }]}>
-            <View style={[styles.binderPageGrid, { width: gridWidth }]}>
-              {(page as unknown as (Listing | null)[]).map((l, i) => {
-                if (!l) {
-                  return (
-                    <View
-                      key={`empty-${pageIndex}-${i}`}
-                      style={[styles.binderPageCell, { width: cellWidth }]}>
-                      <View
-                        style={[
-                          styles.placeholder,
-                          styles.emptySlot,
-                          { width: cardW, height: cardH, borderRadius: radius.sm },
-                        ]}
-                      />
-                      <View style={{ height: LABEL_H }} />
-                    </View>
-                  );
-                }
-                const card = cards[l.card_code];
-                return (
-                  <Pressable
-                    key={l.id}
-                    onPress={() => onCardPress(pageIndex * pageSize + i)}
-                    style={({ pressed }) => [
-                      styles.binderPageCell,
-                      { width: cellWidth },
-                      pressed && styles.cellPressed,
-                    ]}>
-                    {card?.image_url ? (
-                      <Image
-                        source={{ uri: card.image_url }}
-                        style={{
-                          width: cardW,
-                          height: cardH,
-                          borderRadius: radius.sm,
-                          backgroundColor: colors.bgCard,
-                        }}
-                        contentFit="contain"
-                      />
-                    ) : (
-                      <View
-                        style={[
-                          styles.placeholder,
-                          { width: cardW, height: cardH, borderRadius: radius.sm },
-                        ]}
-                      />
-                    )}
-                    {isWishlist && l.deck_id && decksById[l.deck_id] ? (
-                      <View style={styles.deckTileBadge}>
-                        <Text style={styles.deckTileBadgeText}>🃏</Text>
-                      </View>
-                    ) : null}
-                    <Text style={[styles.cardCode, { width: cardW }]} numberOfLines={1}>
-                      {l.card_code}
-                    </Text>
-                    {!isWishlist ? (
-                      <Text style={[styles.cardMeta, { width: cardW }]} numberOfLines={1}>
-                        ×{l.quantity} · {l.listing_type}
-                      </Text>
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        );
-      }}
-    />
-  );
-}
-
 // ---------------- Modals & sheets ----------------
 
 function EditBinderModal({
@@ -1527,62 +1372,6 @@ function CardBrowserModal({
           onClose={() => setActiveFilter(null)}
         />
       </View>
-    </Modal>
-  );
-}
-
-function FilterPickerSheet({
-  visible,
-  label,
-  options,
-  current,
-  formatLabel,
-  onPick,
-  onClose,
-}: {
-  visible: boolean;
-  label: string;
-  options: string[];
-  current: string;
-  formatLabel?: (v: string) => string;
-  onPick: (v: string) => void;
-  onClose: () => void;
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.shareBackdrop} onPress={onClose}>
-        <Pressable style={styles.filterSheetCard} onPress={(e) => e.stopPropagation()}>
-          <View style={styles.filterSheetHeader}>
-            <Text style={styles.shareTitle}>{label.toUpperCase()}</Text>
-            <Pressable onPress={onClose}>
-              <Ionicons name="close" size={24} color={colors.textPrimary} />
-            </Pressable>
-          </View>
-          <FlatList
-            data={['', ...options]}
-            keyExtractor={(v, i) => `${i}-${v}`}
-            renderItem={({ item }) => {
-              const active = item === current;
-              return (
-                <Pressable
-                  onPress={() => onPick(item)}
-                  style={({ pressed }) => [
-                    styles.filterOption,
-                    active && styles.filterOptionActive,
-                    pressed && { opacity: 0.7 },
-                  ]}>
-                  <Text style={[styles.filterOptionText, active && styles.filterOptionTextActive]}>
-                    {item === '' ? 'Any' : formatLabel ? formatLabel(item) : item}
-                  </Text>
-                  {active ? <Ionicons name="checkmark" size={18} color={colors.accent} /> : null}
-                </Pressable>
-              );
-            }}
-          />
-        </Pressable>
-      </Pressable>
     </Modal>
   );
 }
@@ -2163,112 +1952,6 @@ function EditListingSheet({
   );
 }
 
-function CardPagerModal({
-  visible,
-  onClose,
-  listings,
-  cards,
-  decksById,
-  initialIndex,
-  isWishlist,
-  onReceive,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  listings: Listing[];
-  cards: Record<string, CardInfo>;
-  decksById: Record<string, { id: string; name: string | null }>;
-  initialIndex: number;
-  isWishlist: boolean;
-  onReceive?: (l: Listing) => void; // owner "Got it" on a wishlist card
-}) {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
-  const [currentIdx, setCurrentIdx] = useState(initialIndex);
-  const listRef = useRef<FlatList<Listing>>(null);
-
-  useEffect(() => {
-    if (visible) setCurrentIdx(initialIndex);
-  }, [visible, initialIndex]);
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View
-        style={styles.modalBackdrop}
-        onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}>
-        <Pressable style={styles.closeBtn} onPress={onClose}>
-          <Ionicons name="close" size={28} color={colors.textPrimary} />
-        </Pressable>
-
-        <FlatList
-          ref={listRef}
-          data={listings}
-          horizontal
-          pagingEnabled
-          style={styles.modalPagerList}
-          showsHorizontalScrollIndicator={false}
-          keyExtractor={(l) => l.id}
-          initialScrollIndex={initialIndex}
-          getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}
-          onMomentumScrollEnd={(e) => {
-            const idx = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
-            setCurrentIdx(idx);
-          }}
-          renderItem={({ item }) => {
-            const card = cards[item.card_code];
-            return (
-              <View style={[styles.pagerPage, { width: pageWidth }]}>
-                {card?.image_url_lg || card?.image_url ? (
-                  <Image
-                    source={{ uri: card.image_url_lg ?? card.image_url! }}
-                    style={styles.modalImg}
-                    contentFit="contain"
-                  />
-                ) : (
-                  <View style={[styles.modalImg, styles.placeholder]} />
-                )}
-                <Text style={styles.modalCardName}>{card?.name ?? item.card_code}</Text>
-                <Text style={styles.modalCode}>{item.card_code}</Text>
-                {isWishlist && item.deck_id && decksById[item.deck_id] ? (
-                  <View style={styles.deckOriginPill}>
-                    <Text style={styles.deckOriginPillText}>🃏 {decksById[item.deck_id]!.name || 'deck'}</Text>
-                  </View>
-                ) : null}
-                {!isWishlist ? (
-                  <>
-                    <View style={styles.modalRow}>
-                      <Text style={styles.modalLabel}>QUANTITY</Text>
-                      <Text style={styles.modalValue}>×{item.quantity}</Text>
-                    </View>
-                    <View style={styles.modalRow}>
-                      <Text style={styles.modalLabel}>LISTING</Text>
-                      <Text style={styles.modalValue}>{item.listing_type}</Text>
-                    </View>
-                  </>
-                ) : null}
-                {isWishlist && onReceive ? (
-                  <Pressable
-                    style={({ pressed }) => [styles.gotItBtn, pressed && { opacity: 0.85 }]}
-                    onPress={() => onReceive(item)}
-                    accessibilityLabel="Mark as collected">
-                    <Ionicons name="sparkles" size={16} color={colors.bgPrimary} />
-                    <Text style={styles.gotItText}>GOT IT!</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            );
-          }}
-        />
-
-        <Text style={styles.pagerCount}>
-          {currentIdx + 1} / {listings.length}
-        </Text>
-      </View>
-    </Modal>
-  );
-}
-
 const makeStyles = (colors: Palette) => ({
   ...makeSharedStyles(colors),
   ...StyleSheet.create({
@@ -2296,27 +1979,6 @@ const makeStyles = (colors: Palette) => ({
     dfPillActive: { backgroundColor: '#4d9de0', borderColor: '#4d9de0' },
     dfPillText: { color: colors.textSecondary, fontFamily: fonts.body, fontSize: 12 },
     dfPillTextActive: { color: '#0c0a12', fontFamily: fonts.bodyBold },
-    deckTileBadge: {
-      position: 'absolute',
-      top: 2,
-      right: 2,
-      backgroundColor: 'rgba(77,157,224,0.92)',
-      borderRadius: 999,
-      paddingHorizontal: 4,
-      paddingVertical: 1,
-    },
-    deckTileBadgeText: { fontSize: 10 },
-    deckOriginPill: {
-      alignSelf: 'center',
-      marginTop: 8,
-      backgroundColor: 'rgba(77,157,224,0.18)',
-      borderColor: '#4d9de0',
-      borderWidth: 1,
-      borderRadius: 999,
-      paddingHorizontal: 12,
-      paddingVertical: 5,
-    },
-    deckOriginPillText: { color: '#9cc7ee', fontFamily: fonts.bodyBold, fontSize: 12 },
     header: { paddingHorizontal: 12, paddingTop: 12, paddingBottom: 6 },
     title: { fontSize: 22, fontFamily: fonts.serifBold, color: colors.textPrimary, letterSpacing: 1 },
     titleOwner: { fontSize: 18, color: colors.textSecondary, fontFamily: fonts.body },
@@ -2337,54 +1999,6 @@ const makeStyles = (colors: Palette) => ({
     },
     enterEditBtnText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 12, letterSpacing: 2 },
     doneBtnText: { color: colors.accent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
-
-    binderPage: { flex: 1, padding: 6, justifyContent: 'flex-start', alignItems: 'center' },
-    binderPageGrid: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'flex-start',
-      alignItems: 'flex-start',
-    },
-    binderPageCell: { padding: 3, alignItems: 'center' },
-    emptySlot: { opacity: 0.25 },
-
-    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)' },
-    closeBtn: { position: 'absolute', top: 40, right: 16, zIndex: 10, padding: 8 },
-    modalPagerList: { flex: 1 },
-    pagerPage: { flex: 1, padding: 24, justifyContent: 'center', alignItems: 'center', gap: 8 },
-    modalImg: { width: '90%', aspectRatio: 0.72, borderRadius: radius.sm, backgroundColor: colors.bgCard },
-    modalCardName: {
-      fontSize: 18,
-      fontFamily: fonts.serifBold,
-      color: colors.textPrimary,
-      letterSpacing: 1,
-      textAlign: 'center',
-      marginTop: 12,
-    },
-    modalCode: { fontSize: 13, color: colors.accent, fontFamily: fonts.body, letterSpacing: 2 },
-    gotItBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      backgroundColor: '#e0b24d',
-      borderRadius: 999,
-      paddingHorizontal: 22,
-      paddingVertical: 10,
-      marginTop: 18,
-    },
-    gotItText: { color: colors.onAccent, fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 2 },
-    modalRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignSelf: 'stretch',
-      paddingVertical: 8,
-      paddingHorizontal: 8,
-      borderTopWidth: 1,
-      borderColor: colors.border,
-      marginTop: 4,
-    },
-    modalLabel: { color: colors.textMuted, fontFamily: fonts.serif, letterSpacing: 2, fontSize: 11 },
-    modalValue: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 14 },
     shareCard: {
       backgroundColor: colors.bgSecondary,
       borderRadius: radius.lg,
@@ -2396,16 +2010,6 @@ const makeStyles = (colors: Palette) => ({
     },
     qrWrap: { padding: 16, backgroundColor: colors.textPrimary, borderRadius: radius.sm },
     shareUrl: { color: colors.textMuted, fontFamily: fonts.body, fontSize: 12, textAlign: 'center' },
-
-    pagerCount: {
-      position: 'absolute',
-      bottom: 24,
-      alignSelf: 'center',
-      color: colors.textMuted,
-      fontFamily: fonts.serif,
-      letterSpacing: 3,
-      fontSize: 13,
-    },
     manageBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -2573,36 +2177,6 @@ const makeStyles = (colors: Palette) => ({
       includeFontPadding: false,
     },
     filterDropdownValueEmpty: { color: colors.textMuted },
-
-    filterSheetCard: {
-      backgroundColor: colors.bgSecondary,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.borderAccent,
-      paddingVertical: 12,
-      maxHeight: '70%',
-    },
-    filterSheetHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 20,
-      paddingBottom: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    filterOption: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 20,
-      paddingVertical: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    filterOptionActive: { backgroundColor: colors.bgCardHover },
-    filterOptionText: { color: colors.textPrimary, fontFamily: fonts.body, fontSize: 15 },
-    filterOptionTextActive: { color: colors.accent, fontFamily: fonts.serifBold },
     browserFilterButtons: { flexDirection: 'row', gap: 8, marginTop: 16 },
     applyBtn: {
       flex: 1,
