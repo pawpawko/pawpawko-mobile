@@ -147,7 +147,11 @@ export function CardBrowserModal({
         .eq('game', game);
 
       if (q) {
-        const safe = q.replace(/[%,]/g, '');
+        // PostgREST .or() reserved characters are stripped (they can't be
+        // escaped inside .or() values) and LIKE wildcards are backslash-escaped
+        // so they match literally — promo codes like 'OP01-001_p1' contain
+        // underscores. Mirrors web js/trades.js.
+        const safe = q.replace(/[,()"\\*]/g, '').replace(/[%_]/g, '\\$&');
         query = query.or(`name.ilike.%${safe}%,card_code.ilike.%${safe}%`);
       }
       if (f.series) query = query.eq('series', f.series);
